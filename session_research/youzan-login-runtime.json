@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "playwright_core": "1.63.0",
+  "trajectory_commit": "3424e33a045cc66a5b6725aea43da41aca047930",
+  "source_sha256": {
+    "investigation/slider-captcha-lab/human_track.py": "9015631f14502481690b6150f21f10dc30cada77d0dba058f50fb0150449c7fc",
+    "investigation/youzan-slider/utils.py": "7d48033f5b77d428490b2896e6285d4e08e2b57df892cc948802f4222aee8763"
+  },
+  "tested_browser": "Chromium 156, Linux, headed, 1280x900",
+  "ddddocr": "1.5.6"
+}

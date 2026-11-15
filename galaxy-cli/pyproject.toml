@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "galaxy-cli"
+version = "0.1.0"
+description = "Galaxy command-line tools with a discoverable input/output registry"
+requires-python = ">=3.11"
+dependencies = ["jsonschema>=4.23,<5", "XlsxWriter>=3.2,<4", "Pillow==13.0.0"]
+
+[project.scripts]
+galaxy-cli = "galaxy_cli.cli:main"
+galax-cli = "galaxy_cli.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+galaxy_cli = ["feishu_catalog.json"]

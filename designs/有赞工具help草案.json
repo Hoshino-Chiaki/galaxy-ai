@@ -1,0 +1,34 @@
+{
+  "data": [
+    {
+      "tool": "youzan.material-category",
+      "category": "youzan",
+      "description": "查询或创建图片素材分类，命令为 galaxy-cli youzan material-category list 或 create --input JSON。list 无必填参数，返回完整响应，data 为分类数组，解析 categoryId/categoryName/parentCategoryId/categoryType。create 必填 name，可选 parent_id；省略父分类时使用当前店铺的自定义分组根目录，不能向系统分组创建子分类。创建成功时 data 为新分类 ID，随后查询确认；分类 ID 只对当前店铺有效。 扩展动作 rename 必填 category_id、name，保留原父分类；move 必填 category_ids 数组和 parent_id，服务端按原父分类处理，禁止移动系统分类、移到自身或后代。改名和移动依据现有前端调用结构设计，尚未单独实测；移动响应可能包含失败分类列表，必须分别解析，不能只看 code=0。删除分类的 deleteType 对素材的影响尚未明确，不开放删除参数。"
+    },
+    {
+      "tool": "youzan.material-list",
+      "category": "youzan",
+      "description": "分页查询当前店铺指定分类的图片素材，调用 galaxy-cli youzan material-list --input JSON。必填 category_id，可选 page（默认 1）、page_size（默认 15）；不接受其他店铺 ID 或凭证。返回完整有赞响应，data.items 为素材，data.paginator 为分页；attachmentId 是素材 ID，attachmentFullUrl/attachmentUrl 是原图地址，attachmentSize 为字节，width/height 为像素，meta 可能是需要再次解析的 JSON 字符串。可选 keyword 按前端搜索规则至少 3 字符，先检查平台搜索支持状态；不支持时返回明确错误，不忽略关键词。关键词能力依据前端调用结构设计，尚未单独实测。"
+    },
+    {
+      "tool": "youzan.material-upload",
+      "category": "youzan",
+      "description": "将图片保存到当前店铺的素材分类，调用 galaxy-cli youzan material-upload --input JSON。必填 category_id，url 与 path 必须二选一：url 是可公开访问的 HTTP/HTTPS 图片内容地址，path 是当前账号工作目录内的相对文件路径；不接受绝对路径、目录跳转、链接文件、特殊文件或用户身份与凭证参数。本地和网络方式均纳入设计，本地方式需完成上传链路联调；未指定分类时应先确定目标分类，选择未分组也需要真实分类 ID。返回完整实际业务响应；网络方式成功时 data.attachment_id 为素材 ID，attachment_full_url/attachment_url 为原图地址，attachment_size 为字节，width/height 为像素。普通网页、不可达地址或非图片内容会失败；本地方式在完成上传并查询确认入库后才返回成功，不向模型输出上传凭证。"
+    },
+    {
+      "tool": "youzan.product-get",
+      "category": "youzan",
+      "description": "读取当前店铺单个商品的完整信息，调用 galaxy-cli youzan product-get --input JSON，必填 product_id（商品 ID 字符串，不能用商品编码、条码或 SKU ID 代替）。返回完整 code/msg/data，data 包含基本信息、picture 主图、content 详情、tag 商品分组、itemPriceParam 价格、itemStockParam 库存规格、extraParam.fenXiaoParam 分销信息及 updateTime。金额按元解析，SKU 价格可能是十进制字符串；不能将顶层 num=0 当成 SKU 无库存，也不能把供货商字段当成商家可修改字段。"
+    },
+    {
+      "tool": "youzan.product-options",
+      "category": "youzan",
+      "description": "查询商品编辑所需选项，调用 galaxy-cli youzan product-options groups、sku-values、detail-templates、delivery 或 shops --input JSON。所有子命令必填 product_id；sku-values 还必填 spec_id。groups 可选 page、parent_id、keyword，detail-templates 可选 page、page_size；无关参数不接受。分别返回对应接口完整响应；商品分组和模板列表通常在 data.items，分页在 data.paginator，规格和分店按实际响应解析。此处商品分组、行业类目和素材分类不是同一套 ID；能读选项不代表当前商品允许修改该内容，店铺和凭证由服务端提供。"
+    },
+    {
+      "tool": "youzan.product-update",
+      "category": "youzan",
+      "description": "预览或修改商品，调用 galaxy-cli youzan product-update preview 或 apply --input JSON。必填 product_id、changes；apply 额外必填最近读取或预览获得的 base_update_time。changes 的可选字段包括 goods_no、barcode、title、append_image_ids、image_ids、group_ids、price、origin_price、sku_updates、hide_stock、detail_html、is_display、sale_scope，至少指定一项实际变更；省略字段不修改，编码和条码空字符串表示清空。append_image_ids 追加主图，image_ids 是完整目标主图顺序，两者互斥，素材必须属于当前店铺且不能清空全部主图；group_ids 是完整目标商品分组集合。price 为单规格零售价，origin_price 为划线价，均以元为单位传十进制字符串，origin_price=null 清空；多规格商品改价使用 sku_updates。sku_updates 是按 sku_id 匹配的数组，每项可选 price、is_sell、stock_num、code、barcode，未指定 SKU 不修改，stock_num 是非负目标库存，仅适用于允许本店维护库存的商品。hide_stock 是隐藏库存的布尔值；detail_html 仅适用于支持的富文本详情模式；is_display 为立即上架/下架的布尔值；sale_scope 为互斥的 on_shop_ids/off_shop_ids 销售终端集合。preview 不保存，返回 product_id、base_update_time 和 field/before/after 变更列表。apply 校验版本、字段权限、商品类型及上游限制后保存，由适配器保留未修改字段并回读核对，返回完整实际保存响应。价格区间、供应商禁用及只读信息必须遵守；供货价、供应商库存、供应商身份不接受修改。部分字段根据保存结构设计，尚未逐项实测；定时开售、预售、规格重建等缺少完整映射的能力暂不加入输入，状态不确定时先回读，不盲目重复保存。"
+    }
+  ]
+}

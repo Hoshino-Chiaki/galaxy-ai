@@ -1,0 +1,71 @@
+// Form behavior and real video decoding checks. Uses disposable sample input.
+const path = require('node:path')
+const fs = require('node:fs')
+const assert = require('node:assert/strict')
+const { chromium } = require('../../session_research/runtime/node_modules/playwright-core')
+
+;(async () => {
+  const endpoint = process.env.UI_CDP_URL
+  const browser = endpoint
+    ? await chromium.connectOverCDP(endpoint)
+    : await chromium.launch({ executablePath: '/usr/sbin/chromium', headless: true })
+  const context = endpoint ? browser.contexts()[0] : await browser.newContext({ viewport: { width: 1280, height: 820 } })
+  const page = endpoint ? context.pages().find(p => p.url().includes('index.html')) : await context.newPage()
+  assert(page, 'login window exists')
+  const failures = []
+  page.on('pageerror', error => failures.push(error.message))
+  try {
+    if (!endpoint) await page.goto('http://127.0.0.1:4173')
+    await page.locator('#account').waitFor()
+    await page.waitForFunction(() => !document.querySelector('#account').disabled)
+    await page.locator('.login-button').click()
+    await page.getByRole('status').filter({ hasText: '请输入账号。' }).waitFor()
+    assert.equal(await page.locator('#account').evaluate(e => e === document.activeElement), true)
+    await page.locator('#account').fill('preview.user')
+    await page.locator('.login-button').click()
+    await page.getByRole('status').filter({ hasText: '请输入密码。' }).waitFor()
+    await page.locator('#password').fill('preview-only-password')
+    await page.getByRole('button', { name: '显示密码', exact: true }).click()
+    assert.equal(await page.locator('#password').getAttribute('type'), 'text')
+    await page.getByRole('button', { name: '隐藏密码', exact: true }).click()
+    assert.equal(await page.locator('#password').getAttribute('type'), 'password')
+    await page.getByRole('checkbox', { name: '记住登录' }).check({ force: true })
+    await page.locator('#password').press('Enter')
+    await page.getByRole('status').filter({ hasText: endpoint ? '账号或密码错误。' : '请在 Windows 客户端中登录。' }).waitFor()
+    const saved = await page.evaluate(async () => window.desktop
+      ? await window.desktop.preferences.read()
+      : JSON.parse(localStorage.getItem('xingxu.login.preferences.v1')))
+    assert.deepEqual(saved, { remember: true, account: 'preview.user' })
+    await page.reload()
+    await page.waitForFunction(() => document.querySelector('#account').value === 'preview.user')
+    assert.equal(await page.locator('#password').inputValue(), '')
+    assert.equal(await page.getByRole('checkbox', { name: '记住登录' }).isChecked(), true)
+    await page.getByRole('checkbox', { name: '记住登录' }).uncheck({ force: true })
+    await page.waitForTimeout(400)
+    await page.reload()
+    await page.waitForFunction(() => !document.querySelector('#account').disabled)
+    assert.equal(await page.locator('#account').inputValue(), '')
+    assert.equal(await page.getByRole('checkbox', { name: '记住登录' }).isChecked(), false)
+    await page.waitForFunction(() => { const v = document.querySelector('video'); return v.readyState >= 2 && v.currentTime > .2 }, undefined, { timeout: 15000 })
+    const playback = await page.locator('video').evaluate(v => ({ width: v.videoWidth, height: v.videoHeight, playing: !v.paused, loop: v.loop, muted: v.muted }))
+    assert.equal(playback.playing, true)
+    assert.equal(playback.loop, true)
+    assert.equal(playback.muted, true)
+    await page.getByRole('button', { name: '暂停背景视频' }).click()
+    assert.equal(await page.locator('video').evaluate(v => v.paused), true)
+    await page.getByRole('button', { name: '播放背景视频' }).click()
+    await page.waitForFunction(() => !document.querySelector('video').paused)
+    assert.deepEqual(failures, [])
+    await page.waitForTimeout(850)
+    const dir = path.resolve(__dirname, '../artifacts')
+    fs.mkdirSync(dir, { recursive: true })
+    await page.screenshot({ path: path.join(dir, endpoint ? 'windows-renderer.png' : 'login-preview.png') })
+    const result = { passed: true, environment: endpoint ? 'Windows Electron' : 'Linux Chromium',
+      checks: ['required fields', 'keyboard submit', 'password visibility', 'remember account after reload', 'password not persisted', 'uncheck clears account', 'real H264 video playback', 'video pause/resume', 'no renderer errors'], playback }
+    fs.writeFileSync(path.join(dir, endpoint ? 'windows-ui-check.json' : 'browser-ui-check.json'), JSON.stringify(result, null, 2))
+    console.log(JSON.stringify(result))
+  } finally {
+    if (!endpoint) await browser.close()
+    else await browser.close() // Disconnects the CDP client; the Electron app remains running.
+  }
+})().catch(error => { console.error(error); process.exitCode = 1 })

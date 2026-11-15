@@ -1,0 +1,9 @@
+.magic-shine-border { position: absolute; inset: -1px; border-radius: inherit; pointer-events: none; animation: galaxy-shine var(--duration) linear infinite; will-change: background-position; }
+@keyframes galaxy-shine {
+  0% { background-position: 0% 0%; }
+  50% { background-position: 100% 100%; }
+  100% { background-position: 0% 0%; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .magic-shine-border { animation: none; background-position: 50% 50%; will-change: auto; }
+}

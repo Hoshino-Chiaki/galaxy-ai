@@ -1,0 +1,7 @@
+{
+  "name": "galaxy-server-browser",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Server-only browser runtime",
+  "dependencies": { "playwright-core": "1.63.0" }
+}

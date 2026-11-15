@@ -1,0 +1,25 @@
+[Unit]
+Description=galaxy ai backend
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=galaxy-ai
+Group=galaxy-ai
+WorkingDirectory=/opt/galaxy-ai/backend
+Environment=XINGXU_DATA_DIR=/opt/galaxy-ai/backend/private
+Environment=GALAXY_FILES_DIR=/opt/galaxy-ai/hosted-files
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/opt/galaxy-ai/backend/.venv/bin/python -m uvicorn xingxu.app:create_app --factory --host 127.0.0.1 --port 18443 --workers 1 --proxy-headers --forwarded-allow-ips=127.0.0.1 --no-access-log
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/opt/galaxy-ai/backend/private /opt/galaxy-ai/hosted-files
+
+[Install]
+WantedBy=multi-user.target
