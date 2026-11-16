@@ -56,7 +56,9 @@ app.whenReady().then(async () => {
   ipcMain.on('window:minimize', event => { trusted(event); mainWindow.minimize() })
   ipcMain.handle('service:request', (event, action, value) => {
     trusted(event)
-    return authentication.api(action, value)
+    return authentication.api(action, value, progress => {
+      if (!event.sender.isDestroyed()) event.sender.send('upload:progress', progress)
+    })
   })
   ipcMain.handle('clipboard:write-text', (event, value) => {
     trusted(event)

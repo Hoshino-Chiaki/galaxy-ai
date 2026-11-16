@@ -3,6 +3,7 @@ import copy
 import re
 
 from galaxy_cli.registry import load_registry
+from galaxy_cli.tool_categories import DEFAULT_CATEGORY_PROMPTS, category_label
 
 from .auth import AuthFailure
 from .store import JsonRepository
@@ -20,7 +21,7 @@ class ToolPrompts:
         tools = self.catalog()
         categories = sorted({tool['category'] or 'general' for tool in tools})
         with self.repo.transaction(write=False) as state:
-            prompts = state['workspaces'].get(user['workspace_id'], {})
+            prompts = {**DEFAULT_CATEGORY_PROMPTS, **state['workspaces'].get(user['workspace_id'], {})}
             return {'categories': [{'category': category, 'prompt': prompts.get(category, ''),
                 'tool_count': sum((tool['category'] or 'general') == category for tool in tools)} for category in categories]}
 
@@ -32,6 +33,9 @@ class ToolPrompts:
             prompts = state['workspaces'].setdefault(user['workspace_id'], {})
             if prompt.strip():
                 prompts[category] = prompt
+            elif category in DEFAULT_CATEGORY_PROMPTS:
+                # An explicit empty override disables the shipped default too.
+                prompts[category] = ''
             else:
                 prompts.pop(category, None)
         return {'category': category, 'prompt': prompt if prompt.strip() else ''}
@@ -42,6 +46,6 @@ class ToolPrompts:
         allowed = {tool['category'] or 'general' for tool in self.catalog()
             if permissions.get(tool['tool']) in user['permissions']}
         with self.repo.transaction(write=False) as state:
-            prompts = copy.deepcopy(state['workspaces'].get(user['workspace_id'], {}))
-        return [{'role': 'system', 'content': f'【工具分类：{category}】\n{prompt}'}
+            prompts = {**DEFAULT_CATEGORY_PROMPTS, **copy.deepcopy(state['workspaces'].get(user['workspace_id'], {}))}
+        return [{'role': 'system', 'content': f'【工具分类：{category_label(category)}】\n{prompt}'}
             for category, prompt in sorted(prompts.items()) if category in allowed and prompt.strip()]

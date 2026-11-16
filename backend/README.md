@@ -28,3 +28,7 @@ XINGXU_DATA_DIR=/opt/galaxy-ai/backend/private .venv/bin/python -m xingxu.bootst
 公开 API 和现有功能没有改变：登录与会话、用户权限、AI 聊天及打断、分类提示词、有赞多店工具、员工飞书 OAuth、文件生成和发布均由服务器处理。AI 设置与企业应用密钥仅管理员可改，员工只管理自己的连接。结构见 [后端模块结构](../designs/后端模块结构.md)。
 
 项目内的工具权限、路径范围、私有 stdin 与服务进程保护只作用于本项目的服务器请求及其子进程，不设置电脑其他 AI 的会话沙箱策略，也没有全局禁止套接字的设置。
+
+## LangGraph 对话执行
+
+AI 回合已在源码中接入 LangGraph，支持按估算输入预算组装上下文和保存滚动历史摘要，复用现有模型配置、权限网关与打断 API。新增依赖需要在服务器虚拟环境安装。功能范围、配置、离线测试及定向部署文件见 [LangGraph 接入说明](../designs/LangGraph接入.md)。

@@ -1,5 +1,9 @@
 import os
+import asyncio
+import contextlib
+import re
 import uuid
+from urllib.parse import unquote
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated
@@ -23,6 +27,7 @@ from .feishu.routes import create_router as feishu_router
 from .tools import ExecutionContext
 from .files import MIME
 from .deployment import production_directory
+from .uploads import MAX_UPLOAD
 
 
 class LoginRequest(BaseModel):
@@ -73,9 +78,13 @@ def create_app(data_dir=None, policy=None, ai_transport=None, youzan_transport=N
     @asynccontextmanager
     async def lifespan(_app):
         youzan.renewal.start()
+        housekeeping = asyncio.create_task(ai.dispatcher.uploads.housekeeping())
         try:
             yield
         finally:
+            housekeeping.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await housekeeping
             await youzan.close()
     application.router.lifespan_context = lifespan
     bearer = HTTPBearer(auto_error=False)
@@ -85,6 +94,8 @@ def create_app(data_dir=None, policy=None, ai_transport=None, youzan_transport=N
         # No credentials, validation bodies or bearer tokens enter access logs.
         length = request.headers.get("content-length", "0")
         maximum = 8192 if request.url.path == "/api/v1/auth/login" else 128 * 1024
+        if request.method == 'PUT' and re.fullmatch(r'/api/v1/uploads/[0-9a-f-]{36}/content', request.url.path):
+            maximum = MAX_UPLOAD
         if not length.isdigit() or int(length) > maximum:
             return JSONResponse({"error": {"code": "invalid_input", "message": "请求内容过大。"}}, status_code=413)
         response = await call_next(request)
@@ -213,6 +224,27 @@ def create_app(data_dir=None, policy=None, ai_transport=None, youzan_transport=N
         _path, metadata = ai.dispatcher.files.resolve(user, identifier)
         return metadata
 
+    @application.get('/api/v1/uploads/{identifier}')
+    def upload_metadata(identifier: uuid.UUID, user: Annotated[dict, Depends(chat_user)]):
+        return ai.dispatcher.uploads.metadata(user, identifier)
+
+    @application.put('/api/v1/uploads/{identifier}/content')
+    async def upload_content(identifier: uuid.UUID, request: Request,
+                             user: Annotated[dict, Depends(chat_user)], value: Annotated[str, Depends(token)]):
+        if request.headers.get('content-type', '').split(';', 1)[0] != 'application/octet-stream':
+            raise AuthFailure('invalid_input', '上传须使用文件数据流。', 415)
+        length = request.headers.get('content-length', '')
+        if not length.isdigit():
+            raise AuthFailure('invalid_input', '上传须提供文件大小。', 411)
+        if len(request.headers.get('x-upload-filename', '')) > 2048:
+            raise AuthFailure('invalid_filename', '文件名过长。', 422)
+        return await ai.dispatcher.uploads.receive(user, identifier, unquote(request.headers.get('x-upload-filename', '')),
+            int(length), request.stream(), lambda: service.identity(value)['user'])
+
+    @application.delete('/api/v1/uploads/{identifier}')
+    def delete_upload(identifier: uuid.UUID, user: Annotated[dict, Depends(chat_user)]):
+        return ai.dispatcher.uploads.delete(user, identifier)
+
     @application.get('/api/v1/files/{identifier}')
     def download_file(identifier: uuid.UUID, user: Annotated[dict, Depends(chat_user)]):
         path, metadata = ai.dispatcher.files.resolve(user, identifier)
@@ -238,5 +270,9 @@ def create_app(data_dir=None, policy=None, ai_transport=None, youzan_transport=N
     @application.post('/api/v1/chat/cancel')
     async def cancel_message(body: CancelChatInput, user: Annotated[dict, Depends(chat_user)]):
         return await ai.cancel(user, body.request_id)
+
+    @application.get('/api/v1/chat/runs/{identifier}')
+    async def chat_progress(identifier: uuid.UUID, user: Annotated[dict, Depends(chat_user)]):
+        return ai.runs.status(user, identifier)
 
     return application

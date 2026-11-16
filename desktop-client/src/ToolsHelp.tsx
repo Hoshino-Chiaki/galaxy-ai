@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { ArrowRight, ArrowUpRight, Check, Folder, LoaderCircle, RefreshCw, TerminalSquare, X } from 'lucide-react'
 import { service } from './service'
+import { toolCategoryLabel } from './toolCategories'
 
 type Tool = { tool: string; category: string | null; description: string }
 type Catalog = { version?: string; data: Tool[] }
@@ -49,9 +50,9 @@ export default function ToolsHelp() {
         choose(categories[next]); document.getElementById('tool-category-' + categories[next])?.focus()
       }}>
         {categories.map(value => <button key={value} id={'tool-category-' + value} type="button" role="tab" aria-selected={category === value} aria-controls="tools-category-panel" tabIndex={category === value ? 0 : -1} onClick={() => choose(value)}>
-          <Folder size={14} aria-hidden="true" /><span>{value === 'general' ? '通用' : value}</span><small aria-hidden="true">{catalog.data.filter(tool => group(tool) === value).length}</small></button>)}
+          <Folder size={14} aria-hidden="true" /><span>{toolCategoryLabel(value)}</span><small aria-hidden="true">{catalog.data.filter(tool => group(tool) === value).length}</small></button>)}
       </div></aside>
-      <div className="tools-content"><header className="tools-toolbar"><div><Folder size={16} strokeWidth={1.5} /><h2>{category === 'general' ? '通用' : category}</h2><span>{tools.length} 个工具</span></div><button type="button" className="console-ghost" disabled={loading} onClick={() => { void load() }}>{loading ? <LoaderCircle size={13} className="spin" /> : <RefreshCw size={13} />}刷新</button></header>
+      <div className="tools-content"><header className="tools-toolbar"><div><Folder size={16} strokeWidth={1.5} /><h2>{toolCategoryLabel(category)}</h2><span>{tools.length} 个工具</span></div><button type="button" className="console-ghost" disabled={loading} onClick={() => { void load() }}>{loading ? <LoaderCircle size={13} className="spin" /> : <RefreshCw size={13} />}刷新</button></header>
       {tools.length ? <div id="tools-category-panel" className="tools-grid" role="tabpanel" aria-labelledby={'tool-category-' + category}>
         {tools.map(tool => <button id={'tool-card-' + tool.tool} type="button" key={tool.tool} className={`tool-card${selected === tool.tool ? ' selected' : ''}`} aria-label={tool.tool + ' 查看描述'} aria-expanded={selected === tool.tool} aria-controls="tool-description-panel" onClick={() => setSelected(current => current === tool.tool ? null : tool.tool)}>
           <span className="tool-card-title"><span className="tool-card-symbol"><TerminalSquare size={16} strokeWidth={1.5} /></span><strong>{label(tool)}</strong><span className="tool-card-arrow">{selected === tool.tool ? <Check size={14} /> : <ArrowUpRight size={14} />}</span></span>
@@ -59,7 +60,7 @@ export default function ToolsHelp() {
         </button>)}
       </div> : <div className="console-empty"><TerminalSquare size={24} /><p>当前没有已注册的工具</p></div>}
       {detail ? <section id="tool-description-panel" className="tool-description" aria-label="工具描述">
-        <header><div><span className="tool-description-category"><Folder size={11} />{category === 'general' ? '通用' : category}</span><h3>{label(detail)}</h3></div><button type="button" className="chat-header-action" aria-label="关闭工具描述" onClick={close}><X size={17} /></button></header>
+        <header><div><span className="tool-description-category"><Folder size={11} />{toolCategoryLabel(category)}</span><h3>{label(detail)}</h3></div><button type="button" className="chat-header-action" aria-label="关闭工具描述" onClick={close}><X size={17} /></button></header>
         <p>{detail.description}</p>
       </section> : tools.length > 0 && <div className="tools-hint"><ArrowRight size={13} /><span>选择一个工具，查看用途和参数说明。</span></div>}
       </div>

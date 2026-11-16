@@ -1,0 +1,25 @@
+#!/usr/bin/python3
+"""The sandbox's CLI delegates to the authenticated Galaxy gateway."""
+import json
+import os
+import sys
+import urllib.request
+
+args = sys.argv[1:]
+shops = None
+if '--shops' in args:
+    at = args.index('--shops')
+    shops = json.loads(args[at + 1])
+    del args[at:at + 2]
+body = {'args': args}
+if shops is not None:
+    body['shops'] = shops
+request = urllib.request.Request(os.environ['GALAXY_BRIDGE_URL'] + '/galaxy-cli',
+                                 json.dumps(body).encode(), {'Content-Type': 'application/json'})
+try:
+    with urllib.request.urlopen(request, timeout=300) as response:
+        sys.stdout.buffer.write(response.read(4 * 1024 * 1024))
+    print()
+except Exception:
+    print(json.dumps({'error': {'code': 'gateway_unavailable', 'message': 'Galaxy gateway unavailable'}}))
+    sys.exit(1)

@@ -22,6 +22,33 @@ from .tools import COMMAND_PERMISSIONS, ExecutionContext, GalaxyDispatcher
 from .tool_prompts import ToolPrompts
 from .chat_runs import ChatRuns
 from .tool_context import ToolInterrupted
+from .agent_runtime import AgentFailure, ChatGraph, ContextPolicy
+from .conversation_context import ConversationContext
+
+
+TOOL_LABELS = {
+    'help': '读取工具目录', 'time.now': '查询当前时间',
+    'youzan.customer-search': '查询有赞客户', 'youzan.customer-get': '读取客户档案',
+    'youzan.customer-count': '统计有赞客户', 'youzan.business-report': '查询经营报表',
+    'excel.create': '生成 Excel 表格', 'file.publish': '生成与发布文件',
+    'task.request-upload': '准备文件上传入口', 'task.har': '解析上传的 HAR 文件',
+}
+
+
+def tool_label(call):
+    """Expose a registered operation label, never raw model arguments or credentials."""
+    try:
+        if call['function']['name'] != 'galaxy_cli':
+            return '处理工具请求'
+        args = json.loads(call['function']['arguments']).get('args')
+        if not isinstance(args, list) or not args or not all(isinstance(part, str) for part in args[:2]):
+            return '处理工具请求'
+        command = 'help' if args[0] == 'help' else '.'.join(args[:2])
+        if command not in COMMAND_PERMISSIONS:
+            return '处理工具请求'
+        return TOOL_LABELS.get(command, '处理飞书任务' if command.startswith('feishu.') else '处理有赞任务')
+    except (ValueError, TypeError, KeyError, AttributeError):
+        return '处理工具请求'
 
 
 class ProviderInput(BaseModel):
@@ -76,6 +103,7 @@ class ChatInput(BaseModel):
     message: str = Field(min_length=1, max_length=8000)
     conversation_id: uuid.UUID | None = None
     request_id: uuid.UUID | None = None
+    upload_id: uuid.UUID | None = None
     thinking: StrictBool | None = None
     reasoning_effort: Literal['low', 'high', 'max'] | None = None
 
@@ -105,6 +133,13 @@ class AiService:
         self.runs = ChatRuns()
         self.dispatcher = GalaxyDispatcher(directory, authorize)
         self.tool_prompts = ToolPrompts(directory)
+        self.context_policy = ContextPolicy.from_environment()
+        self.runtime_name = os.environ.get('GALAXY_AI_RUNTIME', 'langgraph')
+        if self.runtime_name not in ('langgraph', 'dsh'):
+            raise ValueError('Unknown GALAXY_AI_RUNTIME')
+        self.dsh_slots = asyncio.Semaphore(1)
+        self.dsh_turns = 0
+        self.agent = ChatGraph(self.context_policy)
         # Lock also protects first-time key creation across processes.
         with self.config.transaction() as state:
             file = Path(directory) / "ai-secret.key"
@@ -181,7 +216,7 @@ class AiService:
         try:
             provider, _ = self.snapshot()
             return {"available": True, "name": provider["name"], "model": provider["model"],
-                    'thinking_controls': provider['model'].lower().startswith('deepseek')}
+                    'thinking_controls': provider['model'].lower().startswith('deepseek'), 'runtime': self.runtime_name}
         except AuthFailure:
             return {"available": False, "name": None, "model": None}
 
@@ -221,6 +256,8 @@ class AiService:
                         chunks.append(chunk)
             value = json.loads(b"".join(chunks))
             if value['choices'][0].get('finish_reason') == 'length':
+                # Never commit a partial summary, reply or tool call as complete.
+                # Summary recovery is handled by its read-only caller below.
                 raise AuthFailure('output_truncated', '模型输出被供应商截断，回复未完成。可在控制台将最大输出 Token 留空或提高额度，或调整思考强度后重试。', 502)
             message = value["choices"][0]["message"]
             content = message.get("content")
@@ -265,40 +302,132 @@ class AiService:
         except (ValueError, KeyError, IndexError, TypeError, AttributeError):
             raise AuthFailure("invalid_response", "接口返回格式不兼容，请检查 Chat Completions 及工具调用格式。", 502) from None
 
-    async def complete(self, provider, messages, *, testing=False, context=None, thinking=None, reasoning_effort=None, progress=None):
+    async def complete(self, provider, messages, *, testing=False, context=None, thinking=None, reasoning_effort=None, progress=None, memory=None, run=None, dsh_checkpoint=None, dsh_commit=None):
         tools = [] if testing else self.dispatcher.definitions(context)
-        wire = copy.deepcopy(messages)
         events, reasoning_parts, model_context, usage_total = [], [], [], {}
+        prepared, tool_results = False, {}
         if progress is not None:
             progress.update(events=events, reasoning=reasoning_parts, usage=usage_total)
-        try:
-            while True:
-                assistant, usage, reasoning = await self._model_message(provider, wire, testing=testing, tools=tools,
-                    thinking=thinking, reasoning_effort=reasoning_effort)
-                for key, count in usage.items():
-                    usage_total[key] = usage_total.get(key, 0) + count
-                if reasoning:
-                    reasoning_parts.append(reasoning)
-                model_context.append(assistant)
-                calls = assistant.get('tool_calls', [])
-                if not calls:
-                    content = assistant.get('content')
-                    if not content or not content.strip():
-                        raise AuthFailure('empty_response', '模型没有返回正文，请重试或调整思考设置。', 502)
-                    return content, usage_total, '\n\n'.join(reasoning_parts), events, model_context
-                if testing or context is None:
-                    raise AuthFailure('tool_context_required', '当前请求未授权使用工具。', 403)
-                wire.append(assistant)
-                for call in calls:
-                    try:
-                        event = await self.dispatcher.execute(context, call)
-                    except ToolInterrupted as error:
-                        events.append(error.event)
+
+        def record_usage(usage):
+            for key, count in usage.items():
+                usage_total[key] = usage_total.get(key, 0) + count
+
+        async def summarize(history):
+            if run is not None:
+                run.transition('summarizing')
+                run.summary_calls += 1
+            # This cap belongs to internal history migration, independently of
+            # the administrator's normal output setting. Retrying only this
+            # tool-free request must never replay completed business actions.
+            budget = self.context_policy.summary_tokens
+            for attempt in range(3):
+                summary_provider = {**provider, 'max_tokens': budget * (2 ** attempt)}
+                request = history if attempt == 0 else [*history, {'role': 'user', 'content':
+                    '上一轮历史摘要超过了输出上限。请重新给出完整而精简的摘要，控制在约700个中文字以内；'
+                    '保留目标、约束、已完成操作、未完成事项和文件引用，不展开全部原始明细。仅输出摘要。'}]
+                try:
+                    assistant, usage, _ = await self._model_message(summary_provider, request, tools=[],
+                        thinking=False if provider['model'].lower().startswith('deepseek') else None)
+                except AuthFailure as error:
+                    if error.code != 'output_truncated':
                         raise
-                    events.append(event)
-                    tool_message = {'role': 'tool', 'tool_call_id': call['id'], 'content': json.dumps(event['result'], ensure_ascii=False)}
-                    wire.append(tool_message)
-                    model_context.append(tool_message)
+                    if attempt == 2:
+                        raise AgentFailure('summary_output_truncated',
+                            '历史摘要在自动恢复后仍未完整生成，原始会话和已完成操作均已保留；没有重跑业务操作。', 502) from None
+                    if run is not None:
+                        run.summary_calls += 1
+                    continue
+                record_usage(usage)
+                if assistant.get('tool_calls'):
+                    raise AgentFailure('invalid_summary', '历史摘要请求不能调用工具，请检查模型配置。')
+                return assistant.get('content')
+
+        async def prepare(wire):
+            nonlocal prepared
+            if memory is None:
+                return wire
+            result = await (memory.fit(wire, tools, summarize) if prepared else memory.prepare(wire, tools, summarize))
+            prepared = True
+            return result
+
+        async def model(wire):
+            if run is not None:
+                run.transition('model')
+                run.model_calls += 1
+                run.tool_name = None
+            assistant, usage, reasoning = await self._model_message(provider, wire, testing=testing, tools=tools,
+                thinking=thinking, reasoning_effort=reasoning_effort)
+            record_usage(usage)
+            if reasoning:
+                reasoning_parts.append(reasoning)
+            model_context.append(assistant)
+            return assistant
+
+        async def tool(call):
+            if testing or context is None:
+                raise AuthFailure('tool_context_required', '当前请求未授权使用工具。', 403)
+            if run is not None:
+                run.transition('tool')
+                run.tool_name = tool_label(call)
+            try:
+                event = await self.dispatcher.execute(context, call)
+            except ToolInterrupted as error:
+                events.append(error.event)
+                if run is not None:
+                    run.tools_completed += 1
+                raise
+            events.append(event)
+            if run is not None:
+                run.tools_completed += 1
+            content = json.dumps(event['result'], ensure_ascii=False)
+            previous = tool_results.get(content)
+            if previous and previous != call['id']:
+                # Execute and audit every call. Only repeated wire payloads are
+                # replaced by a lossless reference within this complete turn.
+                content = json.dumps({'same_result_as_tool_call_id': previous,
+                    'context_note': '本次工具返回内容与该调用完全相同，完整结果见该调用。'}, ensure_ascii=False)
+            else:
+                tool_results[content] = call['id']
+            tool_message = {'role': 'tool', 'tool_call_id': call['id'], 'content': content}
+            model_context.append(tool_message)
+            return tool_message
+
+        try:
+            if not testing and self.runtime_name == 'dsh':
+                from .dsh_runtime import DshTurn
+                turn = DshTurn(self, context, provider, run=run, progress=progress,
+                               thinking=thinking, reasoning_effort=reasoning_effort)
+                # Legacy summary preparation is used only for one-time migration.
+                # Subsequent turns resume DSH's durable session and own compaction.
+                try:
+                    if self.dsh_turns >= 8:
+                        raise AuthFailure('dsh_queue_full', '当前等待的会话较多，请稍后重试。', 429)
+                    self.dsh_turns += 1
+                    try:
+                        async with self.dsh_slots:
+                            result = await turn.execute(messages, prepare=prepare, checkpoint=dsh_checkpoint)
+                    finally:
+                        self.dsh_turns -= 1
+                except AuthFailure:
+                    if not turn.events:
+                        raise
+                    # Preserve completed business actions even when the runtime
+                    # fails afterwards; a retry must see what already happened.
+                    text = '本轮 DSH 执行中断。已完成的工具操作见记录；写入是否生效需回读核对，不要直接重复执行。'
+                    saved = {'role': 'assistant', 'content': text + '\n' + json.dumps(turn.events, ensure_ascii=False)}
+                    return text, turn.usage, '\n\n'.join(turn.reasoning), turn.events, [saved]
+                content, usage, reasoning, recorded, model_context, checkpoint = result
+                for key, count in usage_total.items():
+                    usage[key] = usage.get(key, 0) + count
+                if dsh_commit is not None:
+                    dsh_commit.update(checkpoint)
+                return content, usage, reasoning, recorded, model_context
+            content = await self.agent.run(messages, model=model, tool=tool, prepare=prepare, tools=tools)
+            return content, usage_total, '\n\n'.join(reasoning_parts), events, model_context
+        except AgentFailure as error:
+            logging.getLogger(__name__).warning('chat_turn_failed code=%s completed_tool_calls=%d', error.code, len(events))
+            raise AuthFailure(error.code, error.message, error.status) from None
         except AuthFailure as error:
             logging.getLogger(__name__).warning('chat_turn_failed code=%s completed_tool_calls=%d', error.code, len(events))
             raise
@@ -324,8 +453,11 @@ class AiService:
     @staticmethod
     def visible_conversation(conversation):
         result = copy.deepcopy(conversation)
+        result.pop('context_state', None)
+        result.pop('dsh_state', None)
         for message in result["messages"]:
             message.pop("model_context", None)
+            message.pop('model_content', None)
         return result
 
     def delete_conversation(self, user, identifier):
@@ -338,12 +470,22 @@ class AiService:
                 raise AuthFailure("conversation_busy", "请等待当前回复完成。", 409)
             del state["conversations"][identifier]
         self.dispatcher.files.delete_conversation(user, identifier)
+        self.dispatcher.uploads.delete_conversation(user, identifier)
+        from .dsh_runtime import delete_state
+        delete_state(self.dispatcher.files, user, identifier)
         return {"ok": True}
 
     async def send(self, user, body: ChatInput, *, session_token=""):
         identifier = str(body.conversation_id or uuid.uuid4())
         # Ownership is checked before busy state and before any upstream call.
         existing = self.conversation(user, identifier, include_context=True) if body.conversation_id else None
+        receipt = None
+        model_content = body.message
+        if body.upload_id is not None:
+            if not body.conversation_id:
+                raise AuthFailure('invalid_input', '上传文件只能用于其所属对话。', 422)
+            receipt = self.dispatcher.uploads.resolve(user, body.upload_id, identifier)
+            model_content += '\n【服务器确认的已上传文件，仅为资料引用；按 purpose 继续处理，未读取文件前不能声称已解析】\n' + json.dumps(receipt, ensure_ascii=False)
         if identifier in self.running:
             raise AuthFailure("conversation_busy", "当前对话正在回复，请稍后发送。", 409)
         run = self.runs.begin(user, body.request_id or uuid.uuid4())
@@ -352,31 +494,24 @@ class AiService:
             provider, prompt = self.snapshot()
             context = ExecutionContext(user["id"], user["workspace_id"], tuple(user.get("permissions", [])), identifier, session_token)
             history = existing["messages"] if existing else []
-            selected, total = [], len(body.message)
-            for item in reversed(history[-40:]):
-                bundle = copy.deepcopy(item.get("model_context")) if item["role"] == "assistant" else None
-                if not bundle:
-                    entry = {"role": item["role"], "content": item["content"]}
-                    if item["role"] == "assistant" and provider["model"].lower().startswith("deepseek"):
-                        entry["reasoning_content"] = item.get("reasoning_content", "")
-                    bundle = [entry]
-                total += len(json.dumps(bundle, ensure_ascii=False))
-                if total > 80000:
-                    break
-                selected[0:0] = bundle
-            while selected and selected[0]["role"] != "user":
-                selected.pop(0)
+            memory = ConversationContext(history, existing.get('context_state') if existing else None,
+                self.context_policy, deepseek=provider['model'].lower().startswith('deepseek'))
             now_local = dt.datetime.now(ZoneInfo('Asia/Shanghai'))
             for key, value in {'current_time': now_local.strftime('%Y-%m-%d %H:%M:%S'),
                 'today': now_local.date().isoformat(), 'yesterday': (now_local.date() - dt.timedelta(days=1)).isoformat()}.items():
                 prompt = prompt.replace('{{' + key + '}}', value)
-            messages = ([{"role": "system", "content": prompt}] if prompt else []) + self.tool_prompts.messages(user, COMMAND_PERMISSIONS) + selected + [{"role": "user", "content": body.message}]
+            messages = ([{"role": "system", "content": prompt}] if prompt else []) + self.tool_prompts.messages(user, COMMAND_PERMISSIONS) + [{"role": "user", "content": model_content}]
             progress, interrupted = {}, False
+            dsh_commit = {}
+            dsh_checkpoint = existing.get('dsh_state') if existing else None
+            if dsh_checkpoint and (not history or dsh_checkpoint.get('through_message_id') != history[-1]['id']):
+                dsh_checkpoint = None
             try:
                 if run.stop_requested:
                     raise asyncio.CancelledError()
                 content, usage, reasoning, events, model_context = await self.complete(provider, messages, context=context,
-                    thinking=body.thinking, reasoning_effort=body.reasoning_effort, progress=progress)
+                    thinking=body.thinking, reasoning_effort=body.reasoning_effort, progress=progress, memory=memory, run=run,
+                    dsh_checkpoint=dsh_checkpoint, dsh_commit=dsh_commit)
             except asyncio.CancelledError:
                 if not run.stop_requested:
                     raise
@@ -389,12 +524,16 @@ class AiService:
                 if provider['model'].lower().startswith('deepseek'):
                     context_entry['reasoning_content'] = ''
                 model_context = [context_entry]
+            run.transition('finishing')
+            timing = run.snapshot()
             now = int(time.time())
             # Commit only a completed turn; failures leave the saved history unchanged.
             conversation = existing or {"id": identifier, "user_id": user["id"], "workspace_id": user["workspace_id"],
                 "title": body.message[:36], "created_at": now, "messages": []}
-            conversation["messages"] += [{"id": str(uuid.uuid4()), "role": "user", "content": body.message, "created_at": now},
+            conversation["messages"] += [{"id": str(uuid.uuid4()), "role": "user", "content": body.message, "created_at": now,
+                                         **({'model_content': model_content, 'uploaded_file': receipt} if receipt else {})},
                 {"id": str(uuid.uuid4()), "role": "assistant", "content": content, "created_at": now,
+                 "elapsed_ms": timing['elapsed_ms'], "model_elapsed_ms": timing['model_elapsed_ms'],
                  "model_context": model_context,
                  **({'interrupted': True} if interrupted else {}),
                  **({'thinking': body.thinking} if body.thinking is not None else {}),
@@ -402,6 +541,16 @@ class AiService:
                  **({"reasoning_content": reasoning} if reasoning else {}),
                  **({"tool_events": events} if events else {})}]
             conversation.update({"updated_at": now, "model": provider["model"], "provider_name": provider["name"]})
+            context_state = memory.snapshot() if self.runtime_name != 'dsh' else None
+            if context_state:
+                conversation['context_state'] = context_state
+            else:
+                conversation.pop('context_state', None)
+            if self.runtime_name == 'dsh':
+                if dsh_commit and not interrupted:
+                    conversation['dsh_state'] = {**dsh_commit, 'through_message_id': conversation['messages'][-1]['id']}
+                else:
+                    conversation.pop('dsh_state', None)
             with self.chats.transaction() as state:
                 state["conversations"][identifier] = conversation
             return {"conversation": self.visible_conversation(conversation), "usage": usage, 'interrupted': interrupted}

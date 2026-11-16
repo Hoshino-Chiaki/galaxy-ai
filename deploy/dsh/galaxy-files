@@ -1,0 +1,24 @@
+#!/usr/bin/python3
+"""Materialize a current conversation's authorized upload, never a host path."""
+import base64
+import json
+import os
+from pathlib import Path
+import sys
+import urllib.request
+
+if len(sys.argv) != 3 or sys.argv[1] != 'get':
+    sys.exit('Usage: galaxy-files get FILE_ID')
+request = urllib.request.Request(os.environ['GALAXY_BRIDGE_URL'] + '/materialize',
+    json.dumps({'file_id': sys.argv[2]}).encode(), {'Content-Type': 'application/json'})
+try:
+    value = json.load(urllib.request.urlopen(request, timeout=120))
+    if 'error' in value:
+        print(json.dumps(value, ensure_ascii=False))
+        sys.exit(1)
+    path = Path('/workspace/inputs') / value['file_id'] / value['filename']
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(base64.b64decode(value['data'], validate=True))
+    print(json.dumps({'path': str(path), 'file_id': value['file_id'], 'purpose': value['purpose']}, ensure_ascii=False))
+except Exception:
+    sys.exit('Upload unavailable; use the upload receipt and task har for larger files.')

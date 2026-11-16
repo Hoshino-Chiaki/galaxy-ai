@@ -6,6 +6,7 @@ const path = require('node:path')
 const { readFileSync } = require('node:fs')
 const { baseUrl } = require('./backend.json')
 const authority = new URL(baseUrl)
+const uploads = require('./upload.cjs')
 if (authority.protocol !== 'https:') throw new Error('Authentication requires HTTPS')
 const agent = new https.Agent({
   ca: readFileSync(path.join(__dirname, 'certs/server.crt')),
@@ -170,14 +171,24 @@ const routes = {
   'chat.delete': value => ['DELETE', `/api/v1/chat/conversations/${identifier(value.id)}`],
   'chat.send': value => ['POST', '/api/v1/chat/send', value],
   'chat.cancel': value => ['POST', '/api/v1/chat/cancel', value],
+  'chat.progress': value => ['GET', `/api/v1/chat/runs/${identifier(value.request_id)}`],
+  'upload.status': value => ['GET', `/api/v1/uploads/${identifier(value.id)}`],
+  'upload.delete': value => ['DELETE', `/api/v1/uploads/${identifier(value.id)}`],
 }
-async function api(action, value) {
+async function api(action, value, notify = () => {}) {
   try {
-    if (!Object.hasOwn(routes, action) && action !== 'file.download') throw new Error('不支持的操作。')
+    if (!Object.hasOwn(routes, action) && !['file.download', 'file.upload', 'file.upload.cancel'].includes(action)) throw new Error('不支持的操作。')
     await operations
     await restoreSession()
     if (!token) throw new Error('请先登录。')
     const captured = token
+    if (action === 'file.upload.cancel') return { ok: true, data: uploads.cancel(identifier(value?.id), captured) }
+    if (action === 'file.upload') {
+      if (!value || Object.keys(value).some(key => key !== 'id')) throw new Error('上传仅接受已申请的入口标识。')
+      const data = await uploads.upload(identifier(value.id), { bearer: captured, authority, agent, request,
+        isCurrent: () => token === captured, notify: progress => { if (token === captured) notify(progress) } })
+      return { ok: true, data }
+    }
     if (action === 'file.download') {
       const id = identifier(value?.id)
       const metadata = await request('GET', `/api/v1/files/${id}/metadata`, null, captured)

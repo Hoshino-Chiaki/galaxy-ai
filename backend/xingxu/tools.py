@@ -25,6 +25,9 @@ from galaxy_cli.tools.excel.create import normalize as normalize_excel, OUTPUT a
 from jsonschema import Draft202012Validator
 from galaxy_cli.tools.file.publish import normalize as normalize_file, OUTPUT as FILE_OUTPUT
 from .files import FileService
+from .uploads import UploadService
+from .task_tools import arguments as task_arguments
+from galaxy_cli.tools.task.har import OUTPUT as HAR_OUTPUT
 from galaxy_cli import __version__ as CLI_VERSION
 
 GALAXY_PERMISSION = "tools:galaxy_cli"
@@ -33,6 +36,7 @@ COMMAND_PERMISSIONS.update({'youzan.'+name: 'youzan:material:read' if name.start
 COMMAND_PERMISSIONS['youzan.customer-count'] = 'youzan:customer:read'
 COMMAND_PERMISSIONS['time.now'] = 'workspace:read'
 COMMAND_PERMISSIONS.update(FEISHU_PERMISSIONS)
+COMMAND_PERMISSIONS.update({'task.request-upload': 'task:upload', 'task.har': 'task:har:read'})
 
 
 def required_permissions(command, canonical):
@@ -86,8 +90,11 @@ def help_arguments(raw):
     if (not isinstance(args, list) or not 1 <= len(args) <= 8
             or any(not isinstance(arg, str) or not arg or len(arg.encode()) > 900000 or "\x00" in arg for arg in args)):
         raise DispatchDenied("invalid_arguments", "args 必须是长度受限的字符串数组。")
-    if args[0] in ('excel', 'youzan', 'feishu', 'file', 'time') and len(args) >= 2 and args[1] == 'help':
+    if args[0] in ('excel', 'youzan', 'feishu', 'file', 'time', 'task') and len(args) >= 2 and args[1] == 'help':
         args = ['help', '--category', args[0], *args[2:]]
+    normalized = task_arguments(args)
+    if normalized is not None:
+        return normalized
     normalized = time_arguments(args)
     if normalized is not None:
         return normalized
@@ -181,6 +188,7 @@ class GalaxyDispatcher:
         self.output_limit = 256 * 1024
         self.slots = asyncio.Semaphore(8)
         self.files = FileService(directory)
+        self.uploads = UploadService(directory, self.files)
 
     def definitions(self, context):
         if context and GALAXY_PERMISSION in context.permissions and COMMAND_PERMISSIONS["help"] in context.permissions:
@@ -290,6 +298,8 @@ class GalaxyDispatcher:
                 return redact_category(result, credentials)
             if file_context is not None and return_code == 0 and Draft202012Validator(EXCEL_OUTPUT if arguments[0] == 'excel' else FILE_OUTPUT).is_valid(result):
                 return result
+            if arguments[:2] == ['task', 'har'] and return_code == 0 and Draft202012Validator(HAR_OUTPUT).is_valid(result):
+                return result
             if credentials is not None and arguments[:2] == ["youzan", "customer-get"] and isinstance(result, dict) and "customer" in result and set(result) <= {"customer", "relations", "behavior"} and all(isinstance(part, dict) for part in result.values()):
                 return redact_category(result, credentials)
             if isinstance(result, dict) and isinstance(result.get("error"), dict):
@@ -336,7 +346,7 @@ class GalaxyDispatcher:
             if call["type"] != "function" or call["function"]["name"] != "galaxy_cli":
                 raise DispatchDenied("tool_denied", "AI 仅允许调用 galaxy_cli。")
             canonical, scope = scoped_arguments(call["function"]["arguments"])
-            command = ".".join(canonical[:2]) if canonical[0] in ('youzan', 'feishu', 'excel', 'file', 'time') else "help"
+            command = ".".join(canonical[:2]) if canonical[0] in ('youzan', 'feishu', 'excel', 'file', 'time', 'task') else "help"
             if scope is not None and not command.startswith('youzan.'):
                 raise DispatchDenied('invalid_arguments', 'help 仅查询工具说明，请只传 args，不要传 shops。' if command == 'help' else 'shops 仅用于有赞业务工具。')
             if scope == 'all' and not readonly_youzan(canonical) or isinstance(scope, list) and len(scope) > 1 and not readonly_youzan(canonical):
@@ -356,6 +366,27 @@ class GalaxyDispatcher:
                     raise DispatchDenied("permission_denied", "当前账号没有该 CLI 命令权限。")
                 if command == "help":
                     result = await self._run(canonical, user)
+                elif command == 'task.request-upload':
+                    try:
+                        result = self.uploads.create(user, context.conversation_id, strict_json(canonical[3]))
+                        self._check_command(context, command, canonical)
+                    except AuthFailure as error:
+                        raise DispatchDenied(error.code, error.message) from None
+                elif command == 'task.har':
+                    try:
+                        body = strict_json(canonical[3])
+                        receipt = self.uploads.resolve(user, body['file_id'], context.conversation_id)
+                        frame = {'workspace_directory': str(self.files.workspace(user)),
+                                 'har_file_id': receipt['file_id'], 'har_path': receipt['path']}
+                        result = await self._run(canonical, user, file_context=frame)
+                        user = self._check_command(context, command, canonical)
+                        current = self.uploads.resolve(user, body['file_id'], context.conversation_id)
+                        if 'error' not in result and result.get('source', {}).get('sha256') != current['sha256']:
+                            raise DispatchDenied('file_changed', '文件内容已变化，请重新上传。')
+                        if 'error' not in result:
+                            result['source'].update({key: current[key] for key in ('file_id', 'path', 'filename')})
+                    except AuthFailure as error:
+                        raise DispatchDenied(error.code, error.message) from None
                 elif command == 'time.now':
                     result = await self._run(canonical, user)
                     self._check_command(context, command, canonical)

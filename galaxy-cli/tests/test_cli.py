@@ -27,9 +27,9 @@ class CliContractTests(unittest.TestCase):
         self.assertEqual(stderr, "")
         result = json.loads(stdout)
         self.assertEqual(set(result), {"version", "data"})
-        self.assertEqual(len(result["data"]), 19 + len(DOMAINS) + int(any(t["tool"] == "youzan.product-search" for t in result["data"])))
+        self.assertEqual(len(result["data"]), 21 + len(DOMAINS) + int(any(t["tool"] == "youzan.product-search" for t in result["data"])))
         self.assertEqual(set(result["data"][0]), {"tool", "category", "description"})
-        self.assertEqual({t["tool"] for t in result["data"]} | {"youzan.product-search"}, {"feishu.authorized-users", "time.now", "feishu.search", "feishu.document-get", "feishu.folder-list", "feishu.file-download", "excel.create", "file.publish", "youzan.material-category", "youzan.material-list", "youzan.material-upload", "youzan.product-get", "youzan.product-options", "youzan.product-group", "youzan.product-update", "youzan.product-search", "youzan.customer-get", "youzan.customer-search", "youzan.customer-count", "youzan.business-report"} | {"feishu."+d for d in DOMAINS})
+        self.assertEqual({t["tool"] for t in result["data"]} | {"youzan.product-search"}, {"task.request-upload", "task.har", "feishu.authorized-users", "time.now", "feishu.search", "feishu.document-get", "feishu.folder-list", "feishu.file-download", "excel.create", "file.publish", "youzan.material-category", "youzan.material-list", "youzan.material-upload", "youzan.product-get", "youzan.product-options", "youzan.product-group", "youzan.product-update", "youzan.product-search", "youzan.customer-get", "youzan.customer-search", "youzan.customer-count", "youzan.business-report"} | {"feishu."+d for d in DOMAINS})
         self.assertLess(len(stdout), 128000)
         self.assertNotIn("input_schema", stdout)
         self.assertNotIn("output_schema", stdout)
@@ -68,7 +68,7 @@ class CliContractTests(unittest.TestCase):
         registry.register(name="orders.get", description="A temporary test tool", input_schema={"type": "object"},
                           output_schema={"type": "object"}, handler=lambda _: {"result": "test-only"})
         catalog = registry.invoke("help", {})
-        self.assertEqual({t["tool"] for t in catalog["data"]} | {"youzan.product-search"}, {"feishu.authorized-users", "time.now", "orders.get", "feishu.search", "feishu.document-get", "feishu.folder-list", "feishu.file-download", "excel.create", "file.publish", "youzan.material-category", "youzan.material-list", "youzan.material-upload", "youzan.product-get", "youzan.product-options", "youzan.product-group", "youzan.product-update", "youzan.product-search", "youzan.customer-get", "youzan.customer-search", "youzan.customer-count", "youzan.business-report"} | {"feishu."+d for d in DOMAINS})
+        self.assertEqual({t["tool"] for t in catalog["data"]} | {"youzan.product-search"}, {"task.request-upload", "task.har", "feishu.authorized-users", "time.now", "orders.get", "feishu.search", "feishu.document-get", "feishu.folder-list", "feishu.file-download", "excel.create", "file.publish", "youzan.material-category", "youzan.material-list", "youzan.material-upload", "youzan.product-get", "youzan.product-options", "youzan.product-group", "youzan.product-update", "youzan.product-search", "youzan.customer-get", "youzan.customer-search", "youzan.customer-count", "youzan.business-report"} | {"feishu."+d for d in DOMAINS})
         single = registry.invoke("help", {"tool": "orders.get"})
         self.assertEqual(single["data"], [{"tool": "orders.get", "category": None, "description": "A temporary test tool"}])
 

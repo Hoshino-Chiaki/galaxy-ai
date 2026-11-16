@@ -3,6 +3,8 @@ import { ArrowUp, BrainCircuit, ChevronDown, Download, File, FileSpreadsheet, Hi
 import { service } from './service'
 import MarkdownMessage from './components/MarkdownMessage'
 import { ShineBorder } from './components/magicui/ShineBorder'
+import PendingReply, { formatDuration } from './components/PendingReply'
+import UploadRequestCard from './components/UploadRequestCard'
 
 type Props = { user: CurrentUser; error: string; active: boolean }
 type Availability = { available: boolean; name: string | null; model: string | null; thinking_controls?: boolean }
@@ -26,12 +28,14 @@ export default function AiWorkspace({ user, error, active }: Props) {
   const [availability, setAvailability] = useState<Availability | null>(null)
   const [pending, setPending] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const [uploading, setUploading] = useState(false)
+  const uploadingRef = useRef(false)
   const [stopping, setStopping] = useState(false)
-  const request = useRef<{ id: string; stopping: boolean } | null>(null)
+  const request = useRef<{ id: string; stopping: boolean; startedAt: number } | null>(null)
   const [downloading, setDownloading] = useState<string | null>(null)
   const preferenceKey = 'galaxy.thinking.' + user.workspace_id + '.' + user.id
   const [thinkingPreferences, setThinkingPreferences] = useState<ThinkingPreferences>(() => readThinkingPreferences(preferenceKey))
-  const [failure, setFailure] = useState<{ question: string; message: string } | null>(null)
+  const [failure, setFailure] = useState<{ question: string; message: string; uploadId?: string } | null>(null)
   const busyRef = useRef(false)
   const alive = useRef(true)
   const editor = useRef<HTMLTextAreaElement>(null)
@@ -95,12 +99,12 @@ export default function AiWorkspace({ user, error, active }: Props) {
 
   function focusEditor() { requestAnimationFrame(() => editor.current?.focus()) }
   function newConversation() {
-    if (busyRef.current) return
+    if (busyRef.current || uploadingRef.current) return
     setConversation(null); setDraft(''); setNotice(''); setFailure(null); setHistoryOpen(false); focusEditor()
   }
 
   async function openConversation(id: string) {
-    if (busyRef.current) return
+    if (busyRef.current || uploadingRef.current) return
     try {
       const value = await service<Conversation>('chat.get', { id })
       if (alive.current) { setConversation(value); setDraft(''); setNotice(''); setFailure(null); setHistoryOpen(false); focusEditor() }
@@ -108,7 +112,7 @@ export default function AiWorkspace({ user, error, active }: Props) {
   }
 
   async function deleteConversation(id: string) {
-    if (busyRef.current || !window.confirm('删除这段对话？')) return
+    if (busyRef.current || uploadingRef.current || !window.confirm('删除这段对话？')) return
     try {
       await service('chat.delete', { id })
       if (!alive.current) return
@@ -122,25 +126,26 @@ export default function AiWorkspace({ user, error, active }: Props) {
     await submitText(draft)
   }
 
-  async function submitText(text: string) {
-    if (!text.trim() || busyRef.current) return
+  async function submitText(text: string, uploadId?: string) {
+    if (!text.trim() || busyRef.current || uploadingRef.current) return
     if (availability?.available === false) {
       setNotice(user.permissions.includes('ai:configure') ? '请先在控制台添加并启用 AI 连接。' : 'AI 尚未配置，请联系管理员。')
       return
     }
     const original = text
     const requestId = crypto.randomUUID()
-    request.current = { id: requestId, stopping: false }
+    request.current = { id: requestId, stopping: false, startedAt: performance.now() }
     busyRef.current = true
     setBusy(true); setStopping(false); setNotice(''); setFailure(null); setPending(original.trim()); setDraft(''); setHistoryOpen(false)
     try {
       const result = await service<{ conversation: Conversation; interrupted?: boolean }>('chat.send', {
         message: original.trim(), conversation_id: conversation?.id ?? null, request_id: requestId,
+        ...(uploadId ? { upload_id: uploadId } : {}),
         ...(availability?.thinking_controls ? { thinking: thinkingPreferences.thinking, reasoning_effort: thinkingPreferences.effort } : {}),
       })
       if (alive.current) { setConversation(result.conversation); setNotice(result.interrupted ? '已打断' : ''); void loadHistory().catch(() => {}) }
     } catch (reason) {
-      if (alive.current) setFailure({ question: original.trim(), message: (reason as Error).message })
+      if (alive.current) setFailure({ question: original.trim(), message: (reason as Error).message, uploadId })
     } finally {
       busyRef.current = false
       if (request.current?.id === requestId) request.current = null
@@ -174,7 +179,7 @@ export default function AiWorkspace({ user, error, active }: Props) {
       <label className="sr-only" htmlFor="chat-message">消息</label>
       <span className="sr-only" id="composer-hint">Enter 发送，Shift + Enter 换行</span>
       <textarea ref={editor} id="chat-message" name="message" placeholder="有什么想聊的？" rows={1} maxLength={4000}
-        value={draft} disabled={busy} onChange={event => { setDraft(event.target.value); setNotice('') }} onKeyDown={onEditorKeyDown}
+        value={draft} disabled={busy || uploading} onChange={event => { setDraft(event.target.value); setNotice('') }} onKeyDown={onEditorKeyDown}
         aria-describedby="composer-hint" />
       <div className="composer-toolbar">
         <div className="composer-settings"><span className="composer-mode"><Sparkles size={13} strokeWidth={1.6} />{availability?.name || 'AI 对话'}</span>
@@ -191,7 +196,7 @@ export default function AiWorkspace({ user, error, active }: Props) {
           {draft.length > 3600 && <span className="character-count">{draft.length}/4000</span>}
           {busy ? <button type="button" className="send-message stop-message" aria-label="停止回复" title="停止回复" disabled={stopping} onClick={() => { void stopReply() }}>
             {stopping ? <LoaderCircle className="spin" size={16} /> : <Square size={13} fill="currentColor" strokeWidth={1.5} />}
-          </button> : <button type="submit" className="send-message" aria-label="发送消息" title="发送消息" disabled={!draft.trim()}>
+          </button> : <button type="submit" className="send-message" aria-label="发送消息" title="发送消息" disabled={!draft.trim() || uploading}>
             <ArrowUp size={19} strokeWidth={1.9} />
           </button>}
         </div>
@@ -206,9 +211,11 @@ export default function AiWorkspace({ user, error, active }: Props) {
     const tools = message.tool_events ?? []
     return <article key={message.id} className={'chat-message ' + (assistant ? 'assistant' : 'user')}>
       <span className="message-avatar">{assistant ? <img src="./ai.png" alt="AI 头像" /> : <UserRound size={16} strokeWidth={1.5} />}</span>
-      <div className="message-body"><span className="message-author">{assistant ? 'AI' : '你'}</span>
+      <div className="message-body"><span className="message-author">{assistant ? 'AI' : '你'}
+        {assistant && message.elapsed_ms != null && <span className="message-duration">用时 {formatDuration(message.elapsed_ms)}</span>}</span>
         {assistant && (reasoning || tools.length > 0) && <details className="reasoning-disclosure message-process">
           <summary><BrainCircuit size={13} strokeWidth={1.6} /><span>{reasoning ? '思考过程' : '执行过程'}</span>
+            {reasoning && message.model_elapsed_ms != null && <span className="process-duration">思考与生成 {formatDuration(message.model_elapsed_ms)}</span>}
             {tools.length > 0 && <span className="process-tool-count">{tools.length} 次工具调用</span>}
             <ChevronDown className="reasoning-chevron" size={12} /></summary>
           <div className="message-process-content">
@@ -221,6 +228,14 @@ export default function AiWorkspace({ user, error, active }: Props) {
           </div>
         </details>}
         {assistant ? <MarkdownMessage content={message.content} /> : <div className="message-text">{message.content}</div>}
+        {assistant && tools.filter(event => event.status === 'success' && event.command === 'galaxy-cli task request-upload').map(event => {
+          const invitation = event.result as typeof event.result & { upload_request_id?: string; purpose?: string }
+          if (!invitation.upload_request_id || !invitation.purpose) return null
+          return <UploadRequestCard key={event.id} id={invitation.upload_request_id} purpose={invitation.purpose}
+            disabled={busy || uploading} used={!!conversation?.messages.some(item => item.uploaded_file?.file_id === invitation.upload_request_id)}
+            onBusyChange={value => { uploadingRef.current = value; if (alive.current) setUploading(value) }}
+            onContinue={file => submitText(`已上传“${file.filename}”，请按文件用途继续处理。`, file.file_id)} />
+        })}
         {assistant && message.tool_events?.filter(event => event.status === 'success' && ['galaxy-cli excel create', 'galaxy-cli file publish'].includes(event.command) && event.result.file_id && event.result.filename).map(event => {
           const file = event.result
           return <div className="chat-file-card" key={event.id}>
@@ -239,8 +254,8 @@ export default function AiWorkspace({ user, error, active }: Props) {
     <header className="chat-header">
       <div className="chat-breadcrumb"><span>AI</span><span className="breadcrumb-divider">/</span><span className="conversation-title">{conversation?.title || '新对话'}</span></div>
       <div className="chat-header-actions">
-        <button type="button" className="chat-header-action" title="新建对话" aria-label="新建对话" disabled={busy} onClick={newConversation}><SquarePen size={17} strokeWidth={1.6} /></button>
-        <button ref={historyButton} type="button" className={'chat-header-action' + (historyOpen ? ' selected' : '')} title="对话记录" aria-label="对话记录" disabled={busy}
+        <button type="button" className="chat-header-action" title="新建对话" aria-label="新建对话" disabled={busy || uploading} onClick={newConversation}><SquarePen size={17} strokeWidth={1.6} /></button>
+        <button ref={historyButton} type="button" className={'chat-header-action' + (historyOpen ? ' selected' : '')} title="对话记录" aria-label="对话记录" disabled={busy || uploading}
           aria-expanded={historyOpen} aria-controls="conversation-history" onClick={() => setHistoryOpen(value => !value)}><History size={18} strokeWidth={1.6} /></button>
       </div>
     </header>
@@ -257,14 +272,17 @@ export default function AiWorkspace({ user, error, active }: Props) {
         {failure && <>
           {messageRow({ id: 'failed-user', role: 'user', content: failure.question, created_at: 0 })}
           <div className="chat-failure" role="alert"><strong>这次处理未完成</strong><p>{failure.message}</p>
-            <div><button type="button" onClick={() => { void submitText(failure.question) }}>重试</button>
+            <div><button type="button" onClick={() => { void submitText(failure.question, failure.uploadId) }}>重试</button>
               <button type="button" onClick={() => { setDraft(failure.question); setFailure(null); focusEditor() }}>编辑问题</button></div>
           </div>
         </>}
         {pending !== null && <>
           {messageRow({ id: 'pending-user', role: 'user', content: pending, created_at: 0 })}
           <article className="chat-message assistant pending-reply"><span className="message-avatar"><img src="./ai.png" alt="AI 头像" /></span>
-            <div className="message-body"><span className="message-author">AI</span><div className="typing-indicator" aria-label="正在回复"><span /><span /><span /></div><span className="pending-status">{stopping ? '正在打断，请稍候' : '正在处理，请稍候'}</span></div>
+            <div className="message-body"><span className="message-author">AI</span>
+              {request.current && <PendingReply key={request.current.id} requestId={request.current.id} startedAt={request.current.startedAt}
+                thinking={!!availability?.thinking_controls && thinkingPreferences.thinking} stopping={stopping} />}
+            </div>
           </article>
         </>}
       </div></div>

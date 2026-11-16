@@ -1,6 +1,10 @@
-> 本 CLI 仅安装在远程服务器 `/opt/galaxy-ai/galaxy-cli`，由已认证的 Galaxy AI 后端调用。本地不再创建虚拟环境、全局命令链接或 CLI 凭证缓存。
+> 正式 CLI 仅安装在远程服务器 `/opt/galaxy-ai/galaxy-cli`，由已认证的 Galaxy AI 后端调用。任务系统 HAR 工具当前提供独立本地验证入口，使用临时依赖环境，不创建项目虚拟环境、全局命令链接或 CLI 凭证缓存。
 
 # Galaxy CLI
+
+任务系统分类（内部标识 `task`）新增通用工具 `task.har`，使用 Haralyzer 2.4.0 读取 HAR。分类提示词要求先制定方案、一次列齐资料清单，再分析验证和执行，全文见 [任务系统分类提示词](../designs/任务系统分类提示词.md)。支持 summary 概览、requests 筛选和分页、entry 请求详情、body 正文分段读取。保留请求头、Cookie、重复参数、表单中的 JSON 字符串及响应结果；默认隐藏常见凭证字段，`include_sensitive=true` 才读取原始正文和凭证值。工具不会执行抓包中的任何请求。
+
+现已接入按需上传：AI 使用 `task.request-upload` 说明用途并生成上传卡片，用户上传后，服务器将属于当前用户、工作区和对话的 path 与 file_id 提供给 AI。聊天里的 `task.har` 可传这两个引用中的一个，不允许传入任意磁盘路径；独立本地入口仍支持本地 path。上传文件默认保留 24 小时，单文件最多 256 MB，每人最多占用 512 MB。说明见 [按需文件上传](../designs/按需文件上传.md) 和 [任务系统 HAR 解析工具](../designs/任务系统HAR解析工具.md)。
 
 ```bash
 galaxy-cli help

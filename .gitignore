@@ -30,6 +30,7 @@ node_modules/
 runtime/
 __pycache__/
 .pytest_cache/
+.ruff_cache/
 *.py[cod]
 *.egg-info/
 *.tsbuildinfo
@@ -55,3 +56,7 @@ session_research/*-observations.jsonl
 session_research/*-state.json
 .DS_Store
 Thumbs.db
+
+# Local business verification reports (reusable query sources are in scripts/)
+/designs/管家婆库存均价客户端静态核验.md
+/designs/管家婆成本字段只读验证.md

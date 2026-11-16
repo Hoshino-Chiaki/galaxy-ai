@@ -1,0 +1,31 @@
+[Unit]
+Description=Galaxy DSH isolated runtime supervisor
+After=network.target
+
+[Service]
+Type=simple
+User=galaxy-ai
+Group=galaxy-ai
+RuntimeDirectory=galaxy-dsh
+RuntimeDirectoryMode=0700
+ExecStart=/usr/bin/python3 -I /opt/galaxy-ai/dsh-runtime/worker.py
+Restart=on-failure
+RestartSec=2
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectHome=yes
+ProtectSystem=strict
+ReadWritePaths=/opt/galaxy-ai/hosted-files/.dsh /run/galaxy-dsh
+TemporaryFileSystem=/run/galaxy-dsh/jobs:rw,size=192M,mode=0700,uid=1000,gid=1000
+MemoryMax=768M
+MemorySwapMax=0
+TasksMax=256
+CPUQuota=100%
+LimitFSIZE=33554432
+TimeoutStopSec=10
+KillMode=control-group
+
+[Install]
+WantedBy=multi-user.target

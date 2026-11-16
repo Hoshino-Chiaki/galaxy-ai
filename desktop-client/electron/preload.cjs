@@ -6,6 +6,11 @@ contextBridge.exposeInMainWorld('desktop', {
   },
   service: {
     request: (action, value) => ipcRenderer.invoke('service:request', action, value),
+    onUploadProgress: callback => {
+      const listener = (_event, progress) => callback(progress)
+      ipcRenderer.on('upload:progress', listener)
+      return () => ipcRenderer.removeListener('upload:progress', listener)
+    },
   },
   auth: {
     current: () => ipcRenderer.invoke('auth:current'),

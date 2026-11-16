@@ -26,7 +26,7 @@ CATALOG_WRITE=['youzan:material:category:create','youzan:material:category:updat
     'youzan:product:update','youzan:product:price:update','youzan:product:stock:update','youzan:product:display:update']
 ROLES['admin'].extend(CATALOG_READ+CATALOG_WRITE)
 ROLES['employee'].extend(CATALOG_READ)
-for role in ROLES.values():role.extend(['feishu:configure', 'feishu:read', 'feishu:write'])
+for role in ROLES.values():role.extend(['feishu:configure', 'feishu:read', 'feishu:write', 'task:upload', 'task:har:read'])
 ROLES['admin'].append('feishu:app:configure')
 ROLES['admin'].append(COMPANY_ATTENDANCE_READ)
 ROLES['admin'].append('youzan:renew:configure')

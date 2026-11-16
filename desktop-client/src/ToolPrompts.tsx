@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { CheckCircle2, Folder, LoaderCircle, Save } from 'lucide-react'
 import { service } from './service'
+import { toolCategoryLabel } from './toolCategories'
 
 type Category = { category: string; prompt: string; tool_count: number }
 
@@ -45,9 +46,9 @@ export default function ToolPrompts() {
       <aside className="tools-sidebar" aria-label="提示词分类"><div className="tools-sidebar-heading"><h2>工具分类</h2><span>{categories.length} 个分类</span></div>
         <div className="tools-categories">{categories.map(item => <button type="button" key={item.category} aria-pressed={category === item.category}
           className={category === item.category ? 'selected' : ''} disabled={saving} onClick={() => { setCategory(item.category); setError(''); setNotice('') }}>
-          <Folder size={14} /><span>{item.category === 'general' ? '通用' : item.category}</span><small>{item.prompt.trim() ? '已配置' : '未设置'}</small>
+          <Folder size={14} /><span>{toolCategoryLabel(item.category)}</span><small>{item.prompt.trim() ? '已配置' : '未设置'}</small>
         </button>)}</div></aside>
-      {current && <form className="tools-content category-prompt-editor" onSubmit={save}><header className="tools-toolbar"><div><Folder size={16} /><h2>{category === 'general' ? '通用' : category}</h2><span>{current.tool_count} 个工具</span></div></header>
+      {current && <form className="tools-content category-prompt-editor" onSubmit={save}><header className="tools-toolbar"><div><Folder size={16} /><h2>{toolCategoryLabel(category)}</h2><span>{current.tool_count} 个工具</span></div></header>
         <p className="console-section-description">设置这个分类共用的注意事项。留空时不附加分类提示词。</p>
         <label className="sr-only" htmlFor="category-tool-prompt">分类提示词</label>
         <textarea id="category-tool-prompt" value={draft} maxLength={20000} rows={12} disabled={saving}
