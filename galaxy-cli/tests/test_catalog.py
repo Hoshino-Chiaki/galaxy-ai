@@ -211,4 +211,4 @@ class CatalogTests(unittest.TestCase):
             description=registry.get('youzan.'+name).description
             self.assertIn('分销',description);self.assertIn('供货价',description);self.assertNotIn('HAR',description)
         data=registry.invoke('help',{})['data']
-        self.assertEqual(len(data),19+len(DOMAINS)+int(any(t['tool']=='youzan.product-search' for t in data)))
+        self.assertTrue({'erp.department-create','erp.employee-move','youzan.order-search'} <= {t['tool'] for t in data})

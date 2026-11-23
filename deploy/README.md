@@ -6,7 +6,7 @@
 
 服务地址：`https://124.222.51.137`，使用 TCP 443。Nginx 将应用请求转给仅监听本机的 `127.0.0.1:18443`；不需要对外开放内部端口。原有 HTTP 站点及其他域名 HTTPS 站点独立保留。
 
-项目目录 `/opt/galaxy-ai`。服务为 `galaxy-ai.service`，以专用系统用户运行并开机启动。配置、账号、会话、聊天记录、AI 加密密钥、有赞加密凭证、附件索引保存在 `backend/private`；生成附件位于 `hosted-files`。不要把 private 内容加入安装包或下载目录。备份时同时保存 private 与 hosted-files。
+项目目录 `/opt/galaxy-ai`。服务为 `galaxy-ai.service`，以专用系统用户运行并开机启动。2026-11-23 已在当前服务器启用账号文件存储：MySQL 保存身份、登录会话、权限和企业配置；个人聊天、渠道凭证、任务与文件统一位于 `backend/private/accounts/<用户名>/`。具体目录、切换与回退步骤见 [账号文件存储实施记录](../designs/账号文件存储实施记录-20261123.md)。下文旧路径描述属于历史部署方式。不要把 private 内容加入安装包或下载目录。备份需包含 MySQL、加密密钥和账号目录；手工共享文件仍位于 `hosted-files`。
 
 客户端只包含服务器地址与用于校验 HTTPS 的公开证书，AI Key 和有赞账号密码都从服务器端使用。换电脑安装后使用原 Galaxy AI 账号登录即可；更换服务器地址后需要重新登录。
 
@@ -20,7 +20,7 @@ Windows 安装程序由 electron-builder NSIS 生成，可选择安装位置，�
 
 有赞现有配置、加密密码、SID、CSRF 及业务 token 已迁移，云端报表读取已实测成功。2026-11-12 已恢复原有固定登录程序和运行依赖，生产接入方式见下文。普通接口和基于当前有效会话的操作不启动登录程序。
 
-文件工具采用两步流程：`excel.create` 返回 `path/filename/size/sheets`，`file.publish` 接受 `{"path":"相对路径"}`，返回 `file_id/filename/size/media_type/download_path`。工作区位于 `hosted-files/.work/<账号与工作区标识的哈希>/`，仅服务端确定，模型不能指定目录或用户。生成文件保留在工作区，发布时复制到托管根目录，无须刷新服务。同一对话中重复发布同一路径且内容未变时返回已有附件。
+文件工具采用两步流程：`excel.create` 返回 `path/filename/size/sheets`，`file.publish` 接受 `{"path":"相对路径"}`，返回 `file_id/filename/size/media_type/download_path`。文件存储模式下，工作区位于 `backend/private/accounts/<用户名>/workspace/`，发布副本位于该账号的 `files/published/`；DSH 的会话文件和检查点位于 `tasks/dsh/`。路径仅由服务端确定，模型不能指定账号目录。生成文件保留在工作区，发布时复制到对应发布目录，无须刷新服务。同一对话中重复发布同一路径且内容未变时返回已有附件。
 
 文件操作拒绝绝对路径、目录跳转、编码路径、隐藏路径、符号链接、硬链接和特殊文件，按目录句柄逐层打开。发布前后均检查当前登录权限、源文件与托管副本，执行期间撤销权限会取消登记并清理本次副本。`excel:export`、`file:publish`、`file:read` 分别控制生成、托管和下载；附件只有在所属对话成功保存后才可下载，下载还需匹配用户、工作区与对话。文件类型不限于 Excel，客户端使用原生保存对话框，不自动执行下载文件。
 
@@ -41,6 +41,8 @@ Arch 本地的服务注册、旧启动脚本、后端与 CLI 虚拟环境、飞�
 
 
 ## 恢复原有赞登录程序（2026-11-12）
+
+> 后续已于 2026-11-23 上线 SDK 就绪等待与保存后自动获取 SID、CRM、授权店铺。当前生产主脚本摘要为 `77cc550f73da187eb56c08c7e4c788b1baa003378e85d08f3f9935d15d96413d`；下文是 11 月 12 日恢复原版时的历史记录。当前行为、验证限制和回退位置见 [有赞自动连接上线记录](../designs/有赞SDK就绪与自动连接上线记录-20261123.md)。
 
 生产适配器 `backend/xingxu/youzan/login.py` 直接运行原 `session_research/youzan-login.cjs --managed-stdin`，不再使用遇到滑块即退出的替代实现。`youzan-login.sh` 和 `session_research/youzan-login-runtime.json` 同步保留。三个文件与原文件逐字节一致；主脚本 SHA-256 为 `63004226569347014c32cdf95642a72caf0e54931bf0322563e4a3fab4fbc5e3`。
 

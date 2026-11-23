@@ -16,7 +16,8 @@ from .constants import MESSAGES, ACTIVE, ROOT
 from .http import YouzanHttpClient, read_youzan_page
 from .login import YouzanLoginAdapter
 from .sessions import ShopSessions
-from .renewal import RefreshGrant, public_schedule
+from .renewal import RefreshGrant, public_schedule, scheduled_at
+from ..account_storage import enabled as account_files, Accounts
 
 
 def owner_key(user):
@@ -30,9 +31,11 @@ class YouzanService:
         self.cipher = cipher
         self.transport = transport
         self.login_runner = login_runner or self._browser_login
+        self.supports_interactive_verification = login_runner is None
         self.authorize = authorize
         self.renewal = None
         self.tasks = {}
+        self.verifications = {}
         self.browser_slots = asyncio.Semaphore(2)
         self.shop_sessions = ShopSessions(self)
         self.operation_locks = SessionLocks('youzan')
@@ -50,8 +53,7 @@ class YouzanService:
     def _encrypt(self, value):
         return self.cipher.encrypt(value.encode()).decode()
 
-    @staticmethod
-    def _public(record):
+    def _public(self, record):
         if not record:
             return {"configured": False, "account": "", "kdt_id": "", "has_password": False,
                     "sid": {"present": False}, "csrf": {"present": False}, "shops": [], "shops_updated_at": None, "job": None, "auto_refresh": False,
@@ -59,10 +61,10 @@ class YouzanService:
         now = int(time.time())
         sid = record.get("sid", {})
         expired = bool(sid.get("expires_at") and sid["expires_at"] <= now)
-        selected_session = record.get('shop_sessions', {}).get(record.get('kdt_id'), {})
-        csrf_present = ShopSessions.ready(record, selected_session) if record.get('multi_shop') else bool(record.get('csrf', {}).get('secret'))
+        ready_sessions = [entry for entry in record.get('shop_sessions', {}).values() if ShopSessions.ready(record, entry)]
+        csrf_present = bool(ready_sessions) if record.get('multi_shop') else bool(record.get('csrf', {}).get('secret'))
         return {"configured": True, "account": record["account"], "kdt_id": record["kdt_id"],
-                "has_password": bool(record.get("password")), "auto_refresh": any(x['enabled'] for x in public_schedule(record).values()),
+                "has_password": bool(record.get("password") and self._decrypt(record['password'])), "auto_refresh": any(x['enabled'] for x in public_schedule(record).values()),
                 "renewal": public_schedule(record),
                 "updated_at": record["updated_at"], "shops": copy.deepcopy(record.get("shops", [])),
                 "shops_updated_at": record.get("shops_updated_at"),
@@ -70,10 +72,11 @@ class YouzanService:
                 "sid": {"present": bool(sid.get("secret")), "updated_at": sid.get("updated_at"),
                         "expires_at": sid.get("expires_at"), "expired": expired},
                 "csrf": {"present": csrf_present,
-                         "updated_at": record.get("csrf", {}).get("updated_at"), "expired": expired},
+                         "updated_at": max((entry.get('updated_at') or 0 for entry in ready_sessions), default=None)
+                             if record.get('multi_shop') else record.get("csrf", {}).get("updated_at"), "expired": expired},
                 "job": copy.deepcopy(record.get("job"))}
 
-    def summary(self, user):
+    def summary(self, user, *, verification_token=None):
         with self.repo.transaction(write=False) as state:
             key = owner_key(user)
             record = state["connections"].get(key)
@@ -82,6 +85,9 @@ class YouzanService:
             result['auto_refresh'] = any(x['enabled'] for x in result['renewal'].values())
             result['can_configure_renewal'] = 'youzan:renew:configure' in user['permissions']
         lock = self.shop_sessions.locks.get(key)
+        pending = self.verifications.get(key)
+        if pending and pending[0] == verification_token and not pending[2].done():
+            result['verification'] = pending[1]
         return {**result, 'preparing_shops': bool(lock and lock.locked())}
 
     def save(self, user, body):
@@ -90,15 +96,16 @@ class YouzanService:
             old = state["connections"].get(key)
             if old and old.get("job", {}).get("status") in ACTIVE:
                 raise AuthFailure("busy", "刷新进行中，请等待完成或取消后修改配置。", 409)
-            changed = not old or old["account"] != body.account or bool(body.password)
-            if not body.password and (not old or old["account"] != body.account):
-                raise AuthFailure("missing_password", "请输入此有赞账号的密码。", 422)
+            password = (body.password if 'password' in body.model_fields_set else
+                        self._decrypt(old['password']) if old and old['account']==body.account else '')
+            changed = (not old or old["account"] != body.account or self._decrypt(old['password']) != password)
             shop_id = body.kdt_id if body.kdt_id is not None else (old["kdt_id"] if old and not changed else "")
             shop_changed = not old or old["kdt_id"] != shop_id
             record = {"id": old["id"] if old else str(uuid.uuid4()),
                       "revision": str(uuid.uuid4()), "account": body.account, "kdt_id": shop_id,
-                      "password": self._encrypt(body.password) if body.password else old["password"],
-                      "profile_revision": str(uuid.uuid4()) if changed else old["profile_revision"],
+                      "password": self._encrypt(password),
+                      "profile_revision": (old.get('profile_revision', 'account') if old else 'account') if account_files(self.directory)
+                          else str(uuid.uuid4()) if changed else old["profile_revision"],
                       "updated_at": int(time.time()), "job": {}}
             if old and old.get('renewal'):
                 record['renewal'] = copy.deepcopy(old['renewal'])
@@ -128,7 +135,7 @@ class YouzanService:
             if "youzan:configure" not in identity["user"]["permissions"]:
                 raise AuthFailure("forbidden", MESSAGES["forbidden"], 403)
 
-    async def start(self, user, kind, token=None):
+    async def start(self, user, kind, token=None, *, interactive_verification=False):
         self._authorize(token)
         key = owner_key(user)
         if isinstance(token, RefreshGrant) and token.owner != key:
@@ -151,13 +158,14 @@ class YouzanService:
             identifier = str(uuid.uuid4())
             record["job"] = {"id": identifier, "kind": kind, "status": "running", "code": "starting",
                              "trigger": "automatic" if isinstance(token, RefreshGrant) else "manual",
-                             "message": MESSAGES["starting"] if kind == "sid" else MESSAGES["crm"],
+                             "message": MESSAGES["starting"] if kind in ("sid", "connect") else MESSAGES["crm"],
                              "started_at": int(time.time()), "finished_at": None}
             snapshot = copy.deepcopy(record)
-            if kind == 'all':
+            if kind in ('sid', 'all', 'connect'):
                 record['multi_shop'] = snapshot['multi_shop'] = True
             result = self._public(record)
-        task = asyncio.create_task(self._run(key, snapshot, kind, token))
+        # connect is only an API alias for the original SID flow followed by all-shop preparation.
+        task = asyncio.create_task(self._run(key, snapshot, "sid" if kind == "connect" else kind, token, interactive_verification))
         self.tasks[key] = task
         task.add_done_callback(lambda done: self.tasks.pop(key, None) if self.tasks.get(key) is done else None)
         return result
@@ -173,7 +181,7 @@ class YouzanService:
                 record["job"]["finished_at"] = int(time.time())
             if status == 'success':
                 completed = []
-                if record['job'].get('kind') == 'sid':
+                if record['job'].get('kind') in ('sid', 'connect'):
                     completed.append('sid')
                 if code in ('success', 'csrf_success', 'all_ready'):
                     completed.append('csrf')
@@ -183,6 +191,7 @@ class YouzanService:
                         now = int(time.time())
                         schedule.update(last_success_at=now, last_attempt_at=now, paused=False, error=None,
                             next_at=now + schedule['interval_days'] * 86400 if schedule['enabled'] else None)
+                        schedule['next_at'] = scheduled_at(record, kind, schedule)
 
     def select_shop(self, user, shop_id):
         with self.repo.transaction() as state:
@@ -217,16 +226,61 @@ class YouzanService:
             current.update(shops=shops, shops_updated_at=int(time.time()))
             return self._public(current)
 
-    async def _login(self, key, record, token):
-        profile = self.directory / "youzan-profiles" / record["id"] / record["profile_revision"]
+    def submit_verification(self, user, body, token):
+        self._authorize(token)
+        pending = self.verifications.get(owner_key(user))
+        if not pending or pending[0] != token or pending[2].done() or pending[1]['id'] != str(body.id):
+            raise AuthFailure('verification_expired', '验证请求已失效，请查看当前连接状态。', 409)
+        if pending[1]['kind'] != body.kind:
+            raise AuthFailure('invalid_verification', '请完成当前验证步骤。', 422)
+        action = body.model_dump(exclude={'id'}, exclude_none=True)
+        pending[2].set_result(action)
+        return self.summary(user, verification_token=token)
+
+    async def _login(self, key, record, token, interactive_verification=False):
+        if account_files(self.directory):
+            identities = self.repo.accounts.identities()
+            if key not in identities:
+                raise AuthFailure('forbidden', MESSAGES['forbidden'], 403)
+            profile = Accounts(self.directory).browser(identities[key][0])
+        else:
+            profile = self.directory / "youzan-profiles" / record["id"] / record["profile_revision"]
         profile.mkdir(parents=True, exist_ok=True, mode=0o700)
         profile.parent.chmod(0o700)
         async def progress(code):
             if code in {"browser_ready", "form_ready", "slider_payload_ready"}:
                 self._update(key, record["revision"], code=code)
+        async def interactive(event):
+            self._authorize(token)
+            kind = event.get('kind')
+            if kind not in ('send', 'code', 'slider'):
+                raise AuthFailure('login_unconfirmed', MESSAGES['login_unconfirmed'], 502)
+            prompt = {'id': str(uuid.uuid4()), 'kind': kind, 'rejected': event.get('rejected') is True}
+            if kind == 'slider':
+                image = event.get('image', '')
+                if not isinstance(image, str) or len(image) > 270_000 or not re.fullmatch(r'[A-Za-z0-9+/=]+', image):
+                    raise AuthFailure('login_unconfirmed', MESSAGES['login_unconfirmed'], 502)
+                prompt['image'] = image
+            future = asyncio.get_running_loop().create_future()
+            self.verifications[key] = (token, prompt, future)
+            try:
+                self._update(key, record['revision'], code='verification_pending')
+                action = await asyncio.wait_for(future, timeout=180)
+                self._authorize(token)
+                self._update(key, record['revision'], code='verification_submitted')
+                return action
+            except TimeoutError:
+                raise AuthFailure('verification_expired', MESSAGES['verification_expired'], 408) from None
+            finally:
+                self.verifications.pop(key, None)
+
         async with self.browser_slots:
             self._authorize(token)
-            result = await self.login_runner(record["account"], self._decrypt(record["password"]), profile, progress)
+            options = {}
+            if (interactive_verification and token and not isinstance(token, RefreshGrant)
+                    and self.supports_interactive_verification):
+                options['interactive'] = interactive
+            result = await self.login_runner(record["account"], self._decrypt(record["password"]), profile, progress, **options)
         sid = result.get("sid")
         if not isinstance(sid, str) or not sid or len(sid) > 4096 or re.search(r"[\s;\r\n]", sid):
             raise AuthFailure("login_unconfirmed", MESSAGES["login_unconfirmed"], 502)
@@ -250,11 +304,11 @@ class YouzanService:
             record = state['connections'].get(key, {})
         return self._operation_lock(record, key)
 
-    async def _run(self, key, record, kind, token):
+    async def _run(self, key, record, kind, token, interactive_verification=False):
         async with self._operation_lock(record, key):
-            await self._run_bound(key, record, kind, token)
+            await self._run_bound(key, record, kind, token, interactive_verification)
 
-    async def _run_bound(self, key, record, kind, token):
+    async def _run_bound(self, key, record, kind, token, interactive_verification=False):
         revision = record["revision"]
         try:
             self._authorize(token)
@@ -266,15 +320,18 @@ class YouzanService:
                     if error.code != "login_required":
                         raise
                     # Only a confirmed missing/expired login reaches the fixed background program.
-                    await self._login(key, record, token)
+                    await self._login(key, record, token, interactive_verification)
                     shops = await self._list_shops(record)
                 self._authorize(token)
                 self._update(key, revision, code="shops", values={"shops": shops, "shops_updated_at": int(time.time())})
-                if kind == "shops" or not record["kdt_id"]:
+                if kind == "shops" or not record["kdt_id"] and not record.get('multi_shop'):
                     self._update(key, revision, code="shops_ready" if kind == "shops" else "sid_ready", status="success")
                     return
-                if not any(shop["id"] == record["kdt_id"] for shop in shops):
-                    raise AuthFailure("shop_access_required", MESSAGES["shop_access_required"], 403)
+                if record['kdt_id'] and not any(shop["id"] == record["kdt_id"] for shop in shops):
+                    # Removed shop access must not block the remaining authorized shops.
+                    record['kdt_id'] = ''
+                    self._update(key, revision, code='shops', values={
+                        'kdt_id': '', 'csrf': {}, 'category_credentials': {}})
             if kind == 'all' or record.get('multi_shop'):
                 self._update(key, revision, code='all_csrf')
                 results = await self.shop_sessions.collect(key, record, 'all', force=True, validate=lambda: self._authorize(token))
@@ -321,9 +378,18 @@ class YouzanService:
             raise AuthFailure('connection_busy', '当前用户的有赞会话正在刷新，请稍后重试。', 409)
         return await self.shop_sessions.collect(key, record, selection, prepare=prepare, force=force, validate=validate)
 
+    def tool_shop_options(self, user):
+        """Names/IDs only, for clarification; never selects or refreshes a shop."""
+        if not any(p.startswith('youzan:') and p.endswith(':read') for p in user.get('permissions', [])):
+            return []
+        with self.repo.transaction(write=False) as state:
+            record = state['connections'].get(owner_key(user), {})
+            return [{'id': shop['id'], 'name': shop['name']} for shop in record.get('shops', [])
+                if isinstance(shop.get('id'), str) and shop['id'].isdigit() and isinstance(shop.get('name'), str)]
+
     def tool_credentials(self, user, shop_id=None):
         """Private category provider; never exposed by an HTTP response or to the model."""
-        if not any(p in user["permissions"] for p in ("youzan:customer:read","youzan:report:read","youzan:material:read","youzan:product:read")):
+        if not any(p in user["permissions"] for p in ("youzan:customer:read","youzan:report:read","youzan:material:read","youzan:product:read","youzan:order:read")):
             raise AuthFailure("forbidden", "当前账号没有有赞工具读取权限。", 403)
         with self.repo.transaction(write=False) as state:
             record = copy.deepcopy(state["connections"].get(owner_key(user)))
@@ -349,8 +415,8 @@ class YouzanService:
                 "kdt_id": record["kdt_id"], "shop_name": next((s["name"] for s in record.get("shops", []) if s["id"] == record["kdt_id"]), ""),
                 "cookies": category.get("cookies", {}), "origin": category.get("origin", "https://store.youzan.com")}
 
-    async def _browser_login(self, account, password, profile, progress):
-        return await YouzanLoginAdapter(ROOT)(account, password, profile, progress)
+    async def _browser_login(self, account, password, profile, progress, **options):
+        return await YouzanLoginAdapter(ROOT)(account, password, profile, progress, **options)
 
     async def cancel(self, user):
         task = self.tasks.get(owner_key(user))

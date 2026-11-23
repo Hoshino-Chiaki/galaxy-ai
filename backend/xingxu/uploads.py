@@ -8,6 +8,7 @@ import uuid
 from starlette.requests import ClientDisconnect
 
 from galaxy_cli.file_scope import root_directory, child_directory, source_file
+from .account_storage import scoped
 from galaxy_cli.registry import ToolError
 from galaxy_cli.tools.task.request_upload import normalize
 from .auth import AuthFailure
@@ -24,6 +25,7 @@ class UploadService:
         self.repo = JsonRepository(directory, 'uploads', ('requests',))
         self.files = files
         self.slots = asyncio.Semaphore(2)
+        self.storage = None
 
     @staticmethod
     def _permission(user):
@@ -41,7 +43,7 @@ class UploadService:
         if not self._owner(item, user):
             raise AuthFailure('not_found', '上传入口不存在。', 404)
         if committed:
-            with self.files.chats.transaction(write=False) as state:
+            with scoped(self.files.chats, user, write=False, identifier=item['conversation_id']) as state:
                 chat = state['conversations'].get(item['conversation_id'])
                 if (not self._owner(chat, user) or not any(
                     e.get('command') == 'galaxy-cli task request-upload' and e.get('status') == 'success'
@@ -107,12 +109,15 @@ class UploadService:
                     raise AuthFailure('upload_unavailable', '上传入口已使用、过期或正在上传。', 409)
                 used = sum(r.get('reserved_size', r.get('size', 0)) for r in state['requests'].values()
                            if self._owner(r, user) and r['status'] in ('receiving', 'ready'))
-                if used + size > USER_QUOTA:
+                if self.storage is None and used + size > USER_QUOTA:
                     raise AuthFailure('storage_quota', '当前账号文件占用已达到 512 MB，请先删除不再需要的文件。', 413)
                 current.update({'status': 'receiving', 'reserved_size': size, 'nonce': nonce,
                                 'expires_at': now + INVITATION_SECONDS})
             completed = False
+            reservation = None
             try:
+                if self.storage is not None:
+                    reservation = self.storage.reserve(user, filename, size, external=True)['id']
                 workspace = self.files.workspace(user)
                 with root_directory(workspace) as root, child_directory(root, ['uploads', identifier], create=True) as parent:
                     descriptor = os.open('partial', os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600, dir_fd=parent)
@@ -165,6 +170,8 @@ class UploadService:
             except (OSError, ToolError):
                 raise AuthFailure('upload_failed', '文件保存失败，请重试。', 502) from None
             finally:
+                if reservation is not None:
+                    self.storage.release(user, reservation)
                 if not completed:
                     self._erase(user, identifier)
                     with self.repo.transaction() as state:

@@ -17,6 +17,7 @@ from galaxy_cli.file_scope import root_directory, child_directory, source_file, 
 from galaxy_cli.registry import ToolError
 from .auth import AuthFailure
 from .store import JsonRepository
+from .account_storage import enabled as account_files, Accounts, scoped
 
 MAX_FILE_SIZE = 20 * 1024 * 1024
 MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
@@ -24,14 +25,26 @@ MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
 
 class FileService:
     def __init__(self, directory):
+        self.directory = Path(directory)
         self.legacy_root = Path(directory) / 'files'
         self.root = Path(os.environ.get('GALAXY_FILES_DIR') or self.legacy_root)
         self.root.mkdir(mode=0o700, parents=True, exist_ok=True)
         self.repo = JsonRepository(directory, 'files', ('files',))
         self.chats = JsonRepository(directory, 'chats', ('conversations',))
 
+    def account_root(self, user):
+        return Accounts(self.directory).ensure(user)
+
+    def published_root(self, user):
+        return Accounts(self.directory).path(user, 'files/published') if account_files(self.directory) else self.root
+
+    def dsh_root(self, user):
+        return Accounts(self.directory).path(user, 'tasks/dsh') if account_files(self.directory) else Path(os.environ.get('GALAXY_DSH_STORAGE') or self.root / '.dsh') / hashlib.sha256(json.dumps([user['workspace_id'], user['id']], separators=(',', ':')).encode()).hexdigest()
+
     def workspace(self, user):
         # Identity never comes from model arguments or a caller-supplied path.
+        if account_files(self.directory):
+            return Accounts(self.directory).path(user, 'workspace')
         owner = hashlib.sha256(json.dumps([user['workspace_id'], user['id']], separators=(',', ':')).encode()).hexdigest()
         try:
             with root_directory(self.root) as root, child_directory(root, ['.work', owner], create=True):
@@ -91,7 +104,7 @@ class FileService:
                 raise ValueError()
             if self.inspect_source(user, relative) != snapshot:
                 raise ValueError()
-            with source_file(self.root, stored) as hosted:
+            with source_file(self.published_root(user), stored) as hosted:
                 info = regular_file(hosted)
                 digest = hashlib.sha256()
                 while chunk := os.read(hosted, 512 * 1024): digest.update(chunk)
@@ -103,7 +116,7 @@ class FileService:
                             and item['conversation_id'] == str(conversation_id) and item.get('source_path') == relative
                             and item.get('sha256') == snapshot[1]):
                         try:
-                            with source_file(self.root, item['stored_name']) as existing:
+                            with source_file(self.published_root(user), item['stored_name']) as existing:
                                 check = hashlib.sha256()
                                 while chunk := os.read(existing, 512 * 1024): check.update(chunk)
                                 if check.hexdigest() == snapshot[1]:
@@ -118,13 +131,13 @@ class FileService:
         except (ToolError, KeyError, TypeError, ValueError, OSError):
             raise AuthFailure('invalid_publication', '文件托管结果无效，请重新生成后重试。', 502) from None
 
-    def cleanup_publication(self, publication_id, relative):
+    def cleanup_publication(self, publication_id, relative, user=None):
         # Delete only this server-allocated invocation's output, never caller paths.
         stored = publication_id + '_' + Path(relative).name.encode('utf-8')[:200].decode('utf-8', errors='ignore')
         with self.repo.transaction(write=False) as state:
             if publication_id in state['files']: return
         try:
-            with root_directory(self.root) as root:
+            with root_directory(self.published_root(user) if user is not None else self.root) as root:
                 for name in (stored, '.' + publication_id + '.part'):
                     try: os.unlink(name, dir_fd=root)
                     except FileNotFoundError: pass
@@ -147,7 +160,8 @@ class FileService:
                     raise ValueError()
             readable_stem = name[:-5].encode('utf-8')[:200].decode('utf-8', errors='ignore')
             stored_name = identifier + '_' + readable_stem + '.xlsx'
-            target = self.root / stored_name
+            hosting = self.published_root(user)
+            target = hosting / stored_name
             if target.exists():
                 raise ValueError()
             source.chmod(0o600)
@@ -157,7 +171,7 @@ class FileService:
                 if error.errno != errno.EXDEV:
                     raise
                 # Service isolation or a separate hosting volume can make rename cross-device.
-                descriptor_fd, temporary = tempfile.mkstemp(prefix='.' + identifier + '-', dir=self.root)
+                descriptor_fd, temporary = tempfile.mkstemp(prefix='.' + identifier + '-', dir=hosting)
                 try:
                     with os.fdopen(descriptor_fd, 'wb') as output, source.open('rb') as original:
                         shutil.copyfileobj(original, output)
@@ -186,7 +200,7 @@ class FileService:
             if not item or item['user_id'] != user['id'] or item['workspace_id'] != user['workspace_id']:
                 raise AuthFailure('not_found', '文件不存在。', 404)
             item = dict(item)
-        with self.chats.transaction(write=False) as state:
+        with scoped(self.chats, user, write=False, identifier=item['conversation_id']) as state:
             chat = state['conversations'].get(item['conversation_id'])
             if not chat or chat['user_id'] != user['id'] or chat['workspace_id'] != user['workspace_id']:
                 raise AuthFailure('not_found', '文件所属对话不存在。', 404)
@@ -197,7 +211,7 @@ class FileService:
         stored_name = item.get('stored_name', str(identifier) + '.xlsx')
         if not self._valid_name(stored_name):
             raise AuthFailure('not_found', '文件不存在。', 404)
-        path = self.root / stored_name
+        path = self.published_root(user) / stored_name
         if not path.exists() and not item.get('stored_name'):
             path = self.legacy_root / stored_name
         try:
@@ -242,7 +256,7 @@ class FileService:
                 item = state['files'][key]
                 stored_name = item.get('stored_name', key + '.xlsx')
                 if self._valid_name(stored_name):
-                    (self.root / stored_name).unlink(missing_ok=True)
+                    (self.published_root(user) / stored_name).unlink(missing_ok=True)
                     if not item.get('stored_name'):
                         (self.legacy_root / stored_name).unlink(missing_ok=True)
                 del state['files'][key]

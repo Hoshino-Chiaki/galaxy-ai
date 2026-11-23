@@ -3,11 +3,15 @@ const path = require('node:path')
 const fs = require('node:fs/promises')
 const { pathToFileURL } = require('node:url')
 const authentication = require('./auth.cjs')
+const { createUpdater } = require('./updater.cjs')
 
 // Retain the existing DPAPI/session store across the product rename.
 app.setPath('userData', path.join(app.getPath('appData'), '星序 AI'))
 
 let mainWindow
+const updater = createUpdater({ app, notify: state => {
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('updates:status', state)
+} })
 const entryPath = path.join(__dirname, '../dist/index.html')
 const entryUrl = pathToFileURL(entryPath).href
 
@@ -53,6 +57,12 @@ app.whenReady().then(async () => {
     writes = operation
     return operation
   })
+  for (const action of ['state', 'check', 'install']) {
+    ipcMain.handle(`updates:${action}`, async event => {
+      trusted(event)
+      return updater[action]()
+    })
+  }
   ipcMain.on('window:minimize', event => { trusted(event); mainWindow.minimize() })
   ipcMain.handle('service:request', (event, action, value) => {
     trusted(event)
@@ -85,6 +95,8 @@ app.whenReady().then(async () => {
   mainWindow.webContents.session.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false))
   mainWindow.once('ready-to-show', () => mainWindow.show())
   await mainWindow.loadFile(entryPath)
+  setTimeout(() => { void updater.check() }, 4000).unref()
+  setInterval(() => { void updater.check() }, 6 * 60 * 60 * 1000).unref()
 })
 
 app.on('window-all-closed', () => app.quit())

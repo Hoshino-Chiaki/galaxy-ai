@@ -18,18 +18,22 @@ PASSWORD_WORKERS = BoundedSemaphore(4)
 # 属于服务器的服务凭证，不代表每位登录员工都继承该凭证的权限。
 COMPANY_ATTENDANCE_READ = 'feishu:attendance:company:read'
 ROLES = {
-    "admin": ["workspace:read", "ai:chat", "tools:galaxy_cli", "galaxy:help", "users:manage", "ai:configure", "youzan:configure", "youzan:customer:read", "youzan:report:read", "excel:export", "file:publish", "file:read"],
-    "employee": ["workspace:read", "ai:chat", "tools:galaxy_cli", "galaxy:help", "youzan:configure", "youzan:customer:read", "youzan:report:read", "excel:export", "file:publish", "file:read"],
+    "admin": ["workspace:read", "ai:chat", "tools:galaxy_cli", "galaxy:help", "users:manage", "ai:configure", "youzan:configure", "youzan:customer:read", "youzan:report:read", "youzan:order:read", "excel:export", "file:publish", "file:read"],
+    "employee": ["workspace:read", "ai:chat", "tools:galaxy_cli", "galaxy:help", "youzan:configure", "youzan:customer:read", "youzan:report:read", "youzan:order:read", "excel:export", "file:publish", "file:read"],
 }
 CATALOG_READ=['youzan:material:read','youzan:product:read']
 CATALOG_WRITE=['youzan:material:category:create','youzan:material:category:update','youzan:material:upload',
     'youzan:product:update','youzan:product:price:update','youzan:product:stock:update','youzan:product:display:update']
 ROLES['admin'].extend(CATALOG_READ+CATALOG_WRITE)
 ROLES['employee'].extend(CATALOG_READ)
-for role in ROLES.values():role.extend(['feishu:configure', 'feishu:read', 'feishu:write', 'task:upload', 'task:har:read'])
+for role in ROLES.values():role.extend(['feishu:chat', 'feishu:configure', 'feishu:read', 'feishu:write', 'feishu:create', 'feishu:delete', 'feishu:update', 'task:upload', 'task:har:read', 'guanjia:configure'])
 ROLES['admin'].append('feishu:app:configure')
 ROLES['admin'].append(COMPANY_ATTENDANCE_READ)
 ROLES['admin'].append('youzan:renew:configure')
+ROLES['admin'].append('permissions:manage')
+ROLES['admin'].append('ai:usage:read')
+for role in ROLES.values():role.extend(['clawbot:configure','clawbot:send'])
+for role in ROLES.values():role.extend(['schedule:create','schedule:read','schedule:update','schedule:delete'])
 
 
 
@@ -51,14 +55,19 @@ def digest(value):
     return hashlib.sha256(value.encode()).hexdigest()
 
 
-def public_user(user):
+def public_user(user, permissions=None):
     return {"id": user["id"], "username": user["username"], "role": user["role"],
-            "workspace_id": user["workspace_id"], "permissions": ROLES.get(user["role"], [])}
+            "workspace_id": user["workspace_id"], "permissions": ROLES.get(user["role"], []) if permissions is None else permissions}
 
 
 class AuthService:
     def __init__(self, repository: JsonRepository, policy=AuthPolicy(), clock=time.time):
         self.repository, self.policy, self.clock = repository, policy, clock
+
+    def _public(self, user):
+        permissions = self.repository.permissions(user) if hasattr(self.repository, 'permissions') else None
+        profile = self.repository.profile(user) if hasattr(self.repository, 'profile') else {}
+        return {**public_user(user, permissions), **profile}
 
     def seed(self, username, password):
         username = username.strip()
@@ -145,7 +154,7 @@ class AuthService:
             state["sessions"][digest(token)] = {"user_id": user["id"], "created_at": now,
                 "expires_at": expires, "remember": remember, "auth_version": current["auth_version"]}
         return {"access_token": token, "token_type": "Bearer", "expires_at": expires,
-                "remember": remember, "user": public_user(current)}
+                "remember": remember, "user": self._public(current)}
 
     def identity(self, token):
         if not token or len(token) > 256:
@@ -157,8 +166,8 @@ class AuthService:
                 raise AuthFailure("session_expired", "登录已失效，请重新登录。")
             if user["auth_version"] != session["auth_version"] or user["role"] not in ROLES:
                 raise AuthFailure("session_expired", "登录已失效，请重新登录。")
-            return {"user": public_user(user), "expires_at": session["expires_at"],
-                    "remember": session["remember"]}
+        return {"user": self._public(user), "expires_at": session["expires_at"],
+                "remember": session["remember"]}
 
     def logout(self, token):
         with self.repository.transaction() as state:

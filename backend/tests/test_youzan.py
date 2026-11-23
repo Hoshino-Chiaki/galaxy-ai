@@ -13,7 +13,7 @@ from xingxu.youzan import YouzanService, extract_csrf
 PASSWORD = "fixture-youzan-secret-password"
 SID = "fixture-sid-secret"
 CSRF = "fixture-crm-secret"
-BODY = {"account": "fixture-merchant", "password": PASSWORD, "kdt_id": "123456"}
+BODY = {"account": "fixture-merchant", "password": PASSWORD, "kdt_id": "123456", "prepare_login": False}
 URL = "/api/v1/admin/youzan"
 
 
@@ -91,7 +91,7 @@ def test_manual_refresh_encryption_and_csrf_only(setup):
     summary = wait(client, admin)
     assert summary["job"]["status"] == "success"
     assert summary["sid"]["present"] and summary["csrf"]["present"]
-    assert len(calls["browser"]) == len(calls["http"]) == 1
+    assert len(calls["browser"]) == 1 and len(calls["http"]) == 2
     assert calls["browser"][0][:2] == (BODY["account"], PASSWORD)
     assert SID + BODY["account"] in calls["http"][0].headers["cookie"]
     assert "kdt_id=123456" in calls["http"][0].headers["cookie"]
@@ -105,8 +105,8 @@ def test_manual_refresh_encryption_and_csrf_only(setup):
     assert app.state.ai.cipher.decrypt(record["csrf"]["secret"].encode()).decode() == CSRF
     assert (directory / "youzan.json").stat().st_mode & 0o777 == 0o600
     assert client.post(URL + "/refresh", headers=admin, json={"kind": "csrf"}).status_code == 202
-    assert wait(client, admin)["job"]["code"] == "csrf_success"
-    assert len(calls["browser"]) == 1 and len(calls["http"]) == 2
+    assert wait(client, admin)["job"]["code"] == "all_ready"
+    assert len(calls["browser"]) == 1 and len(calls["http"]) == 4
     restored = YouzanService(directory, app.state.ai.cipher)
     user = app.state.auth.identity(admin["Authorization"][7:])["user"]
     assert restored.summary(user)["csrf"]["present"]
@@ -142,7 +142,7 @@ def test_distinct_owners_get_distinct_credentials_and_profiles(setup):
         assert wait(client, headers)["job"]["status"] == "success"
     assert calls["browser"][0][2] != calls["browser"][1][2]
     assert "sid=" + SID + BODY["account"] in calls["http"][0].headers["cookie"]
-    assert "sid=" + SID + "other-merchant" in calls["http"][1].headers["cookie"]
+    assert "sid=" + SID + "other-merchant" in calls["http"][-1].headers["cookie"]
     assert BODY["account"] not in client.get(URL, headers=other).text
     assert "other-merchant" not in client.get(URL, headers=admin).text
 
@@ -152,11 +152,13 @@ def test_keep_password_shop_change_and_account_change_clear_binding(setup):
     client.put(URL, headers=admin, json=BODY)
     client.post(URL + "/refresh", headers=admin, json={"kind": "sid"})
     assert wait(client, admin)["csrf"]["present"]
-    unchanged = client.put(URL, headers=admin, json={**BODY, "password": ""}).json()
+    saved = {key:value for key,value in BODY.items() if key != 'password'}
+    unchanged = client.put(URL, headers=admin, json=saved).json()
     assert unchanged["sid"]["present"] and unchanged["csrf"]["present"]
-    shop_changed = client.put(URL, headers=admin, json={**BODY, "password": "", "kdt_id": "789"}).json()
-    assert shop_changed["sid"]["present"] and not shop_changed["csrf"]["present"]
-    assert client.put(URL, headers=admin, json={**BODY, "account": "new", "password": ""}).status_code == 422
+    shop_changed = client.put(URL, headers=admin, json={**saved, "kdt_id": "789"}).json()
+    assert shop_changed["sid"]["present"] and shop_changed["csrf"]["present"]
+    blank = client.put(URL, headers=admin, json={**BODY, "account": "new", "password": ""})
+    assert blank.status_code == 200 and not blank.json()['has_password']
     changed = client.put(URL, headers=admin, json={**BODY, "account": "new"}).json()
     assert not changed["sid"]["present"] and not changed["csrf"]["present"]
     client.post(URL + "/refresh", headers=admin, json={"kind": "sid"})
@@ -196,7 +198,7 @@ def test_failed_login_preserves_previous_sid_and_sanitizes_error(setup):
     assert result["job"]["status"] == "failed"
     assert result["sid"] == initial["sid"] and result["csrf"] == initial["csrf"]
     assert_private(result)
-    assert len(calls["http"]) == 1
+    assert len(calls["http"]) == 2
 
 
 def test_crm_redirect_never_sends_cookies_to_redirect_host(setup):
@@ -206,8 +208,9 @@ def test_crm_redirect_never_sends_cookies_to_redirect_host(setup):
     client.post(URL + "/refresh", headers=admin, json={"kind": "sid"})
     result = wait(client, admin)
     assert result["sid"]["present"] and not result["csrf"]["present"]
-    assert result["job"]["code"] == "unexpected_redirect"
-    assert len(calls["http"]) == 1
+    assert result["job"]["code"] == "all_partial"
+    assert all(shop['error']['code'] == 'unexpected_redirect' for shop in result['shop_sessions'])
+    assert len(calls["http"]) == 2
     assert_private(result)
 
 
@@ -247,8 +250,8 @@ def test_sid_without_shop_and_csrf_prerequisites(setup):
     assert client.post(URL + "/refresh", headers=admin, json={"kind": "csrf"}).status_code == 422
     client.post(URL + "/refresh", headers=admin, json={"kind": "sid"})
     result = wait(client, admin)
-    assert result["job"]["code"] == "sid_ready" and result["sid"]["present"]
-    assert not result["csrf"]["present"] and calls["http"] == []
+    assert result["job"]["code"] == "all_ready" and result["sid"]["present"]
+    assert result["csrf"]["present"] and len(calls["http"]) == 2
     assert client.post(URL + "/refresh", headers=admin, json={"kind": "csrf"}).status_code == 422
 
 
@@ -344,7 +347,7 @@ Module._load = function(name, parent, main) {
 
 def test_shop_names_and_selection_are_scoped_and_reuse_sid(setup):
     _, client, admin, employee, calls, _ = setup
-    client.put(URL, headers=admin, json={"account": BODY["account"], "password": PASSWORD})
+    client.put(URL, headers=admin, json={"account": BODY["account"], "password": PASSWORD, "prepare_login": False})
     client.post(URL + "/refresh", headers=admin, json={"kind": "shops"})
     result = wait(client, admin)
     assert result["job"]["code"] == "shops_ready"
@@ -366,7 +369,7 @@ def test_shop_names_and_selection_are_scoped_and_reuse_sid(setup):
     assert result["job"]["status"] == "success" and result["csrf"]["present"]
     assert len(calls["browser"]) == 1
     changed = client.put(URL + "/shop", headers=admin, json={"kdt_id": "789"}).json()
-    assert changed["sid"] == result["sid"] and not changed["csrf"]["present"]
+    assert changed["sid"] == result["sid"] and changed["csrf"]["present"]
     assert client.get(URL + '/shops', headers=employee).json()['configured'] is False
     assert client.put(URL + '/shop', headers=employee, json={'kdt_id':'123456'}).status_code == 422
     assert_private(result)
@@ -374,7 +377,7 @@ def test_shop_names_and_selection_are_scoped_and_reuse_sid(setup):
 
 def test_initial_shop_read_never_automatically_logs_in(setup):
     _, client, admin, _, calls, _ = setup
-    client.put(URL, headers=admin, json={"account": BODY["account"], "password": PASSWORD})
+    client.put(URL, headers=admin, json={"account": BODY["account"], "password": PASSWORD, "prepare_login": False})
     assert client.get(URL + "/shops", headers=admin).json()["shops"] == []
     assert calls["browser"] == [] and calls["shops"] == []
 
@@ -384,10 +387,10 @@ def test_same_account_save_keeps_selected_shop_without_raw_id_input(setup):
     client.put(URL, headers=admin, json=BODY)
     client.post(URL + "/refresh", headers=admin, json={"kind": "shops"})
     wait(client, admin)
-    result = client.put(URL, headers=admin, json={"account": BODY["account"], "password": ""}).json()
+    result = client.put(URL, headers=admin, json={"account": BODY["account"], "prepare_login": False}).json()
     assert result["kdt_id"] == BODY["kdt_id"]
     assert result["shops"] and result["sid"]["present"]
-    changed = client.put(URL, headers=admin, json={"account": "another-account", "password": PASSWORD}).json()
+    changed = client.put(URL, headers=admin, json={"account": "another-account", "password": PASSWORD, "prepare_login": False}).json()
     assert changed["kdt_id"] == "" and changed["shops"] == [] and not changed["sid"]["present"]
 
 

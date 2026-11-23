@@ -16,6 +16,8 @@ from .youzan.tool_runtime import catalog_body, readonly_youzan, tool_failed, red
 from .youzan.tool_runtime import is_customer_count_result
 from .feishu.tools import PERMISSIONS as FEISHU_PERMISSIONS, arguments as feishu_arguments, permissions as feishu_permissions
 from .time_tools import arguments as time_arguments
+from .guanjia.tools import arguments as gjp_arguments, redact as redact_gjp
+from galaxy_cli.gjp.schemas import OUTPUT as GJP_OUTPUT
 from galaxy_cli.tools.time.now import OUTPUT as TIME_OUTPUT
 from galaxy_cli.tools.feishu.authorized_users import OUTPUT as AUTHORIZED_USERS_OUTPUT
 from galaxy_cli.feishu_capabilities import DOMAINS as FEISHU_DOMAINS
@@ -27,23 +29,59 @@ from galaxy_cli.tools.file.publish import normalize as normalize_file, OUTPUT as
 from .files import FileService
 from .uploads import UploadService
 from .task_tools import arguments as task_arguments
+from .erp_tools import arguments as erp_arguments, run as erp_run
+from .account_info import arguments as account_arguments
+from .clawbot.tools import arguments as clawbot_arguments, run as clawbot_run, permissions as clawbot_permissions
+from .schedule.tools import arguments as schedule_arguments, run as schedule_run, PERMISSIONS as SCHEDULE_PERMISSIONS
 from galaxy_cli.tools.task.har import OUTPUT as HAR_OUTPUT
 from galaxy_cli import __version__ as CLI_VERSION
 
 GALAXY_PERMISSION = "tools:galaxy_cli"
 COMMAND_PERMISSIONS = {"help": "galaxy:help", "youzan.customer-search": "youzan:customer:read", "youzan.customer-get": "youzan:customer:read", "youzan.business-report": "youzan:report:read", "excel.create": "excel:export", "file.publish": "file:publish"}
 COMMAND_PERMISSIONS.update({'youzan.'+name: 'youzan:material:read' if name.startswith('material-') else 'youzan:product:read' for name in CATALOG_NAMES})
+COMMAND_PERMISSIONS['youzan.order-search'] = 'youzan:order:read'
 COMMAND_PERMISSIONS['youzan.customer-count'] = 'youzan:customer:read'
+COMMAND_PERMISSIONS['interaction.ask'] = 'ai:chat'
 COMMAND_PERMISSIONS['time.now'] = 'workspace:read'
+COMMAND_PERMISSIONS.update({'erp.' + name: 'users:manage' for name in ('employee-create', 'department-create', 'employee-move')})
+COMMAND_PERMISSIONS.update({'gjp.' + name: 'guanjia:configure' for name in ('inventory', 'organizations', 'product-info')})
+COMMAND_PERMISSIONS.update({'schedule.'+name:permission for name,permission in SCHEDULE_PERMISSIONS.items()})
+COMMAND_PERMISSIONS['account.me'] = 'workspace:read'
+COMMAND_PERMISSIONS['clawbot.send'] = 'clawbot:send'
 COMMAND_PERMISSIONS.update(FEISHU_PERMISSIONS)
 COMMAND_PERMISSIONS.update({'task.request-upload': 'task:upload', 'task.har': 'task:har:read'})
 
 
 def required_permissions(command, canonical):
+    if command == 'clawbot.send':return clawbot_permissions(canonical)
     if command.startswith('feishu.'):return feishu_permissions(command,canonical)
     if command.startswith('youzan.') and command[7:] in CATALOG_NAMES:
         return catalog_permissions(command[7:],catalog_body(canonical))
     return {COMMAND_PERMISSIONS[command]}
+
+
+def help_visible(command, permissions):
+    """Use the execution grants; unknown/unregistered commands stay hidden."""
+    grants=set(permissions)
+    if command not in COMMAND_PERMISSIONS:return False
+    if command.startswith('youzan.') and command[7:] in CATALOG_NAMES:
+        name=command[7:]
+        return any(catalog_permissions(name,{'action':action,'changes':{}}).issubset(grants)
+            for action in CATALOG_ACTIONS.get(name,('query',)))
+    if command.startswith('feishu.'):
+        name=command.split('.',1)[1]
+        if name in FEISHU_DOMAINS:
+            return any(feishu_permissions(command,['feishu',name,'--input',json.dumps({'action':action})]).issubset(grants)
+                for action in FEISHU_DOMAINS[name]['commands'])
+        return feishu_permissions(command,['feishu',name,'--input','{}']).issubset(grants)
+    return COMMAND_PERMISSIONS[command] in grants
+
+
+def command_allowed(command, canonical, permissions):
+    if command.startswith('feishu.') and command.split('.',1)[1] in FEISHU_DOMAINS:
+        body=strict_json(canonical[canonical.index('--input')+1])
+        if body.get('action','help')=='help':return help_visible(command,permissions)
+    return required_permissions(command,canonical).issubset(permissions)
 
 
 GALAXY_TOOL = {"type": "function", "function": {
@@ -90,8 +128,34 @@ def help_arguments(raw):
     if (not isinstance(args, list) or not 1 <= len(args) <= 8
             or any(not isinstance(arg, str) or not arg or len(arg.encode()) > 900000 or "\x00" in arg for arg in args)):
         raise DispatchDenied("invalid_arguments", "args 必须是长度受限的字符串数组。")
-    if args[0] in ('excel', 'youzan', 'feishu', 'file', 'time', 'task') and len(args) >= 2 and args[1] == 'help':
+    if args[0] in ('excel', 'youzan', 'feishu', 'file', 'time', 'task', 'erp', 'gjp', 'interaction', 'schedule', 'clawbot', 'account') and len(args) >= 2 and args[1] == 'help':
         args = ['help', '--category', args[0], *args[2:]]
+    if args[0] == 'interaction.ask':
+        args = ['interaction', 'ask', *args[1:]]
+    if args[0] == 'interaction':
+        if len(args) not in (4, 6) or args[:3] != ['interaction', 'ask', '--input'] or len(args) == 6 and args[4:] != ['--format', 'json']:
+            raise DispatchDenied('invalid_arguments', '请使用 interaction ask --input JSON。')
+        from galaxy_cli.tools.interaction.ask import normalize
+        try:
+            body = normalize(strict_json(args[3]))
+        except (ValueError, TypeError, ToolError):
+            raise DispatchDenied('invalid_arguments', '选择框问题和选项格式无效。') from None
+        return ['interaction', 'ask', '--input', json.dumps(body, ensure_ascii=False), '--format', 'json']
+    normalized = account_arguments(args)
+    if normalized is not None:
+        return normalized
+    normalized = clawbot_arguments(args)
+    if normalized is not None:
+        return normalized
+    normalized = schedule_arguments(args)
+    if normalized is not None:
+        return normalized
+    normalized = erp_arguments(args)
+    if normalized is not None:
+        return normalized
+    normalized = gjp_arguments(args)
+    if normalized is not None:
+        return normalized
     normalized = task_arguments(args)
     if normalized is not None:
         return normalized
@@ -179,6 +243,11 @@ class GalaxyDispatcher:
         self.authorize = authorize
         self.category_provider = category_provider
         self.feishu_provider = None
+        self.gjp_provider = None
+        self.schedule_provider = None
+        self.clawbot_provider = None
+        self.account_provider = None
+        self.shop_choices = None
         self.shop_resolver = None
         self.operation_guard = None
         self.shop_provider = None
@@ -213,7 +282,7 @@ class GalaxyDispatcher:
         # OpenAPI，并在具体业务适配器中继续校验数据范围。即使平台服务凭证
         # 属于管理员，也不能扩大当前登录者实际获准的操作和数据权限。
         user = self._principal(context)
-        if not required_permissions(command, arguments).issubset(user['permissions']):
+        if not command_allowed(command, arguments, user['permissions']):
             raise DispatchDenied('permission_denied', '当前账号没有该 CLI 命令权限。')
         return user
 
@@ -226,13 +295,17 @@ class GalaxyDispatcher:
             raise DispatchDenied("cli_unavailable", "Galaxy CLI 尚未安装。")
         if not re.fullmatch(r"[a-zA-Z0-9_-]{1,100}", user["id"]):
             raise DispatchDenied("identity_mismatch", "用户标识无效。")
-        base = self.directory / "cli-users"
-        base.mkdir(mode=0o700, exist_ok=True)
-        home = base / user["id"]
-        if base.is_symlink() or home.is_symlink():
-            raise DispatchDenied("invalid_storage", "CLI 用户目录不可用。")
-        home.mkdir(mode=0o700, exist_ok=True)
-        home.chmod(0o700)
+        from .account_storage import enabled as account_files, Accounts
+        if account_files(self.directory):
+            home = Accounts(self.directory).path(user, 'runtime/cli')
+        else:
+            base = self.directory / "cli-users"
+            base.mkdir(mode=0o700, exist_ok=True)
+            home = base / user["id"]
+            if base.is_symlink() or home.is_symlink():
+                raise DispatchDenied("invalid_storage", "CLI 用户目录不可用。")
+            home.mkdir(mode=0o700, exist_ok=True)
+            home.chmod(0o700)
         environment = {"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8", "HOME": str(home),
                        "XDG_CONFIG_HOME": str(home / "config"), "GALAXY_CONFIG_HOME": str(home / "config"),
                        "GALAXY_USER_ID": user["id"], "GALAXY_WORKSPACE_ID": user["workspace_id"],
@@ -255,7 +328,12 @@ class GalaxyDispatcher:
         except OSError:
             raise DispatchDenied("cli_unavailable", "Galaxy CLI 无法启动。") from None
         total = 0
-        output_limit=2*1024*1024 if catalog_context is not None else self.output_limit
+        output_limit=self.output_limit
+        # A full order scan is bounded by each upstream HTTP timeout, not by a
+        # single-page process deadline. Cancellation still kills the process tree.
+        all_order_pages = (arguments[:3] == ['youzan', 'order-search', 'query']
+            and catalog_context is not None
+            and strict_json(arguments[arguments.index('--input')+1]).get('all_pages') is True)
 
         async def read(stream):
             nonlocal total
@@ -275,11 +353,19 @@ class GalaxyDispatcher:
         try:
             stdout, _stderr, return_code, _ = await asyncio.wait_for(
                 asyncio.gather(read(process.stdout), read(process.stderr), process.wait(), supply()),
-                timeout=180 if catalog_context is not None else 40 if file_context is not None else self.timeout if credentials is None else 180 if arguments[0] == 'feishu' else 90 if arguments[:2] == ['youzan', 'business-report'] else 60 if arguments[:2] == ["youzan", "customer-get"] else 40)
+                timeout=None if all_order_pages else 180 if catalog_context is not None else 40 if file_context is not None else self.timeout if credentials is None else 180 if arguments[0] == 'feishu' else 90 if arguments[:2] == ['youzan', 'business-report'] else 60 if arguments[:2] == ["youzan", "customer-get"] else 40)
             try:
                 result = strict_json(stdout.decode("utf-8"))
             except (ValueError, UnicodeError):
                 raise DispatchDenied("invalid_cli_output", "CLI 未返回有效 JSON。") from None
+            if arguments[0] == 'gjp':
+                if return_code == 0 and Draft202012Validator({**GJP_OUTPUT, 'properties': {**GJP_OUTPUT['properties'], 'version': {'type': 'string'}}}).is_valid(result):
+                    return redact_gjp(result, credentials)
+                if isinstance(result, dict) and isinstance(result.get('error'), dict):
+                    error = result['error']
+                    if isinstance(error.get('code'), str) and isinstance(error.get('message'), str):
+                        return redact_gjp({'error': {'code': error['code'][:80], 'message': error['message'][:800]}}, credentials)
+                raise DispatchDenied('invalid_cli_output', '管家婆工具返回结构无效。')
             if arguments[:2] == ['time', 'now'] and return_code == 0 and Draft202012Validator(TIME_OUTPUT).is_valid(result):
                 return result
             if arguments[:2] == ['feishu','authorized-users'] and return_code == 0 and Draft202012Validator(AUTHORIZED_USERS_OUTPUT).is_valid(result):
@@ -326,7 +412,7 @@ class GalaxyDispatcher:
                 pass
             await process.wait()
 
-    async def execute(self, context, call):
+    async def execute(self, context, call, *, interaction=None):
         started = time.monotonic()
         canonical = []
         scope = None
@@ -346,12 +432,14 @@ class GalaxyDispatcher:
             if call["type"] != "function" or call["function"]["name"] != "galaxy_cli":
                 raise DispatchDenied("tool_denied", "AI 仅允许调用 galaxy_cli。")
             canonical, scope = scoped_arguments(call["function"]["arguments"])
-            command = ".".join(canonical[:2]) if canonical[0] in ('youzan', 'feishu', 'excel', 'file', 'time', 'task') else "help"
+            command = ".".join(canonical[:2]) if canonical[0] in ('youzan', 'feishu', 'excel', 'file', 'time', 'task', 'erp', 'gjp', 'interaction', 'schedule', 'clawbot', 'account') else "help"
+            if context.background_run and (command.startswith('schedule.') or command in ('interaction.ask','task.request-upload')):
+                raise DispatchDenied('scheduled_input_required','定时任务无人值守，不能等待输入或修改调度；请明确说明缺少的资料。')
             if scope is not None and not command.startswith('youzan.'):
                 raise DispatchDenied('invalid_arguments', 'help 仅查询工具说明，请只传 args，不要传 shops。' if command == 'help' else 'shops 仅用于有赞业务工具。')
             if scope == 'all' and not readonly_youzan(canonical) or isinstance(scope, list) and len(scope) > 1 and not readonly_youzan(canonical):
                 raise DispatchDenied('shop_scope_denied', '写入操作不能遍历全部或多家店铺，请明确指定一家店铺。')
-            if not required_permissions(command,canonical).issubset(user["permissions"]):
+            if not command_allowed(command,canonical,user['permissions']):
                 raise DispatchDenied("permission_denied", "当前账号没有该 CLI 命令权限。")
             event["command"] = "galaxy-cli " + " ".join(canonical[:2]) if command != "help" else "galaxy-cli help" + (
                 " " + " ".join(json.loads(canonical[-1]).values()) if "--input" in canonical else "")
@@ -359,13 +447,34 @@ class GalaxyDispatcher:
                 event['command'] += ' ' + canonical[2]
             elif command.startswith('feishu.') and canonical[1] in FEISHU_DOMAINS:
                 event['command'] += ' ' + strict_json(canonical[canonical.index('--input')+1]).get('action','help')
-            async with self.slots:
+            async with (nullcontext() if command == 'interaction.ask' else self.slots):
                 # Recheck after waiting for a slot, including the command-specific grant.
                 user = self._principal(context)
-                if not required_permissions(command,canonical).issubset(user["permissions"]):
+                if not command_allowed(command,canonical,user['permissions']):
                     raise DispatchDenied("permission_denied", "当前账号没有该 CLI 命令权限。")
                 if command == "help":
                     result = await self._run(canonical, user)
+                    user = self._check_command(context, command, canonical)
+                    if isinstance(result.get('data'),list):
+                        result = {**result,'data':[row for row in result['data']
+                            if isinstance(row,dict) and help_visible(row.get('tool'),user['permissions'])]}
+                elif command == 'interaction.ask':
+                    if interaction is None:
+                        raise DispatchDenied('chat_context_required', '当前客户端不支持选择框，请用文字询问并等待用户下一条回复，不能自行确定范围。')
+                    try:
+                        result = await interaction(strict_json(canonical[3]))
+                    except AuthFailure as error:
+                        raise DispatchDenied(error.code, error.message) from None
+                    self._check_command(context, command, canonical)
+                elif command == 'account.me':
+                    if not self.account_provider:raise DispatchDenied('account_unavailable', '账号信息服务尚未启用。')
+                    result = self.account_provider.summary(user)
+                elif command == 'clawbot.send':
+                    result = await clawbot_run(self, context, command, canonical)
+                elif command.startswith('schedule.'):
+                    result = await schedule_run(self, context, command, canonical)
+                elif command in ('erp.employee-create', 'erp.department-create', 'erp.employee-move'):
+                    result = await erp_run(self, context, command, canonical)
                 elif command == 'task.request-upload':
                     try:
                         result = self.uploads.create(user, context.conversation_id, strict_json(canonical[3]))
@@ -398,7 +507,7 @@ class GalaxyDispatcher:
                         snapshot = self.files.inspect_source(user, relative) if command == 'file.publish' else None
                         file_context = {'workspace_directory': str(workspace)}
                         if command == 'file.publish':
-                            file_context.update({'hosting_directory': str(self.files.root), 'publication_id': publication_id})
+                            file_context.update({'hosting_directory': str(self.files.published_root(user)), 'publication_id': publication_id})
                         result = await self._run(canonical, user, file_context=file_context)
                         user = self._principal(context)
                         if COMMAND_PERMISSIONS[command] not in user['permissions']:
@@ -410,7 +519,9 @@ class GalaxyDispatcher:
                         raise DispatchDenied(error.code, error.message) from None
                     finally:
                         if command == 'file.publish':
-                            self.files.cleanup_publication(publication_id, relative)
+                            self.files.cleanup_publication(publication_id, relative, user)
+                elif command.startswith('gjp.'):
+                    result = await self._gjp_run(context, command, canonical)
                 elif command.startswith('feishu.'):
                     result = await self._feishu_run(context, command, canonical)
                 else:
@@ -433,6 +544,8 @@ class GalaxyDispatcher:
                 message = '已停止等待飞书写入，是否已生效需回读核对；打断不会撤销已完成的修改。'
             elif event.get('command', '').startswith('galaxy-cli youzan ') and not readonly_youzan(canonical):
                 message = '已停止等待该写入操作，是否已在有赞生效需核对，打断不会撤销已完成的修改。'
+            elif event.get('command', '').startswith('galaxy-cli erp '):
+                message = '已停止等待 ERP 操作，请到人员管理核对结果；打断不会撤销已完成的修改。'
             event.update({'status': 'cancelled', 'result': {'error': {'code': 'interrupted', 'message': message}}})
         except DispatchDenied as error:
             status = "error" if error.code in {"cli_unavailable", "cli_failed", "cli_timeout", "output_limit", "invalid_cli_output"} else "denied"
@@ -454,6 +567,21 @@ class GalaxyDispatcher:
     async def _single_youzan(self, context, command, canonical):
         return await run_single(self, context, command, canonical)
 
+    async def _gjp_run(self, context, command, canonical):
+        if self.gjp_provider is None:
+            raise DispatchDenied('guanjia_login_required', '请先在“我的账号 → 管家婆”登录。')
+        user = self._check_command(context, command, canonical)
+        try:
+            credentials = self.gjp_provider.credentials(user)
+            result = await self._run(canonical, user, credentials=credentials)
+            user = self._check_command(context, command, canonical)
+            current = self.gjp_provider.credentials(user)
+            if any(current.get(k) != credentials.get(k) for k in ('cookie', 'sid', 'domain')):
+                raise DispatchDenied('connection_changed', '管家婆登录已变化，请重新查询。')
+            return result
+        except AuthFailure as error:
+            raise DispatchDenied(error.code, error.message) from None
+
     @staticmethod
     def _redact_feishu(value, credentials):
         if isinstance(value, dict):return {k:GalaxyDispatcher._redact_feishu(v, credentials) for k,v in value.items()}
@@ -470,7 +598,16 @@ class GalaxyDispatcher:
             name=command.split('.',1)[1]
             body=strict_json(canonical[canonical.index('--input')+1])
             from galaxy_cli.feishu_capabilities import DOMAINS, describe
-            if name in DOMAINS and body.get('action','help')=='help':return describe(name,body)
+            if name in DOMAINS and body.get('action','help')=='help':
+                result=describe(name,body)
+                def allowed(action):
+                    return feishu_permissions(command,['feishu',name,'--input',json.dumps({'action':action})]).issubset(user['permissions'])
+                if body.get('command'):
+                    if not allowed(body['command']):
+                        raise DispatchDenied('permission_denied','当前账号没有该飞书操作权限。')
+                else:
+                    result['data']=[row for row in result['data'] if allowed(row['action'])]
+                return result
             legacy={'search':('drive','+search'),'document-get':('docs','+fetch'),
                     'folder-list':('drive','files.list'),'file-download':('drive','+download')}
             if name == 'authorized-users':

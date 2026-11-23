@@ -20,7 +20,7 @@ def catalog_body(arguments):
 def readonly_youzan(arguments):
     name = arguments[1]
     if name == 'product-group': return arguments[2] in ('list', 'get', 'stores')
-    if name in ('customer-search', 'customer-get', 'customer-count', 'business-report', 'material-list', 'product-get', 'product-options', 'product-search'):
+    if name in ('customer-search', 'customer-get', 'customer-count', 'business-report', 'material-list', 'product-get', 'product-options', 'product-search', 'order-search'):
         return True
     return name == 'material-category' and arguments[2] == 'list' or name == 'product-update' and arguments[2] == 'preview'
 
@@ -28,6 +28,8 @@ def readonly_youzan(arguments):
 def tool_failed(command, arguments, result):
     parts = list(result.values()) if command == 'youzan.customer-get' and 'customer' in result else [result]
     failed = any(not isinstance(part, dict) or 'error' in part or part.get('code', 0) not in (0, 200) for part in parts)
+    if command == 'youzan.order-search':
+        failed = failed or result.get('success') is False
     if command == 'youzan.business-report':
         failed = not report_succeeded(arguments[2], result)
     if command == 'youzan.material-category' and arguments[2] == 'move' and 'error' not in result:

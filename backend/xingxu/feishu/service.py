@@ -25,6 +25,7 @@ class FeishuService:
         self.oauth = FeishuOAuth(transport)
         self.application = FeishuApplication(transport)
         self.locks = {}
+        self.bot = None
 
     def _encrypt(self, value):return self.cipher.encrypt(json.dumps(value).encode()).decode()
 
@@ -77,6 +78,7 @@ class FeishuService:
             'pending': {key: pending[key] for key in ('id', 'url', 'user_code', 'expires_at', 'interval')} if pending else None,
             'cli_ready': (Path(__file__).resolve().parents[2]/'feishu/bin/lark-cli').is_file()}
         if 'feishu:app:configure' in user['permissions']:result['has_app_secret'] = bool(app and app.get('secret'))
+        if self.bot:result['bot'] = self.bot.summary(user)
         return result
 
     def save_app(self, user, body):
@@ -179,6 +181,7 @@ class FeishuService:
     async def disconnect(self, user):
         async with self.locks.setdefault(owner_key(user), asyncio.Lock()):
             with self.repo.transaction() as state:state['connections'].pop(owner_key(user), None)
+        if self.bot:await self.bot.disconnect(user)
         return self.summary(user)
 
     async def credentials(self, user, validate=lambda: None, *, domain=None, action=None):

@@ -2,6 +2,9 @@ import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { Check, CheckCircle2, Cpu, Eye, EyeOff, KeyRound, LoaderCircle, Pencil, Play, Plus, Save, Star, TerminalSquare, Trash2, X } from 'lucide-react'
 import ToolsHelp from './ToolsHelp'
 import ToolPrompts from './ToolPrompts'
+import DeepseekBalance from './components/DeepseekBalance'
+import AdvancedSettings from './components/AdvancedSettings'
+import StorageSettings from './components/StorageSettings'
 import { service } from './service'
 import './console.css'
 
@@ -10,7 +13,7 @@ const blankProvider = (): ProviderForm => ({ name: '', base_url: '', api_key: ''
 
 export default function AdminConsole() {
   const [config, setConfig] = useState<AiSettings | null>(null)
-  const [aiTab, setAiTab] = useState<'models' | 'prompt' | 'tools' | 'tool-prompts'>('models')
+  const [aiTab, setAiTab] = useState<'models' | 'prompt' | 'tools' | 'tool-prompts' | 'advanced' | 'storage'>('models')
   const [prompt, setPrompt] = useState('')
   const [form, setForm] = useState<ProviderForm | null>(null)
   const [showKey, setShowKey] = useState(false)
@@ -106,14 +109,13 @@ export default function AdminConsole() {
   }
 
   return <section className="console-panel" aria-label="管理员控制台">
-    <header className="chat-header"><div className="chat-breadcrumb"><span>AI 设置</span></div></header>
     <div className="console-scroll">
       <div className="console-body">
-        <div className="console-page-heading"><div><h1>AI</h1><p>{aiTab === 'models' ? '添加并管理可用的模型连接。' : aiTab === 'prompt' ? '统一所有成员的 AI 回复规则。' : aiTab === 'tool-prompts' ? '分别设置每类工具的共用注意事项。' : '按分类浏览工具与调用说明。'}</p></div>{aiTab === 'models' && <button className="console-primary" type="button" onClick={() => edit()}><Plus size={15} />添加 AI</button>}</div>
+
         <div className="console-tabs" role="tablist" aria-label="AI 配置分类" onKeyDown={event => {
           if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
           event.preventDefault()
-          const tabs = ['models', 'prompt', 'tools', 'tool-prompts'] as const
+          const tabs = ['models', 'prompt', 'tools', 'tool-prompts', 'advanced', 'storage'] as const
           const next = tabs[(tabs.indexOf(aiTab) + (event.key === 'ArrowLeft' ? tabs.length - 1 : 1)) % tabs.length]
           setAiTab(next); setSuccess(''); setError('')
           document.getElementById(`ai-tab-${next}`)?.focus()
@@ -126,15 +128,20 @@ export default function AdminConsole() {
             onClick={() => { setAiTab('tools'); setSuccess(''); setError('') }}><TerminalSquare size={14} />工具列表</button>
           <button id="ai-tab-tool-prompts" type="button" role="tab" aria-selected={aiTab === 'tool-prompts'} aria-controls="ai-tool-prompts-panel" tabIndex={aiTab === 'tool-prompts' ? 0 : -1}
             onClick={() => { setAiTab('tool-prompts'); setSuccess(''); setError('') }}><Pencil size={13} />工具提示词</button>
+          <button id="ai-tab-advanced" type="button" role="tab" aria-selected={aiTab === 'advanced'} aria-controls="ai-advanced-panel" tabIndex={aiTab === 'advanced' ? 0 : -1}
+            onClick={() => { setAiTab('advanced'); setSuccess(''); setError('') }}><TerminalSquare size={14} />高级设置</button>
+          <button id="ai-tab-storage" type="button" role="tab" aria-selected={aiTab === 'storage'} aria-controls="ai-storage-panel" tabIndex={aiTab === 'storage' ? 0 : -1}
+            onClick={() => { setAiTab('storage'); setSuccess(''); setError('') }}><Save size={14} />文件存储</button>
         </div>
         <div className="console-notification" role="status" aria-live="polite">{error ? <span className="console-error">{error}</span> : success ? <span className="console-success"><CheckCircle2 size={14} />{success}</span> : null}</div>
         {aiTab === 'models' && <section id="ai-model-panel" className="console-section" role="tabpanel" aria-labelledby="ai-tab-models">
-          <div className="console-section-heading"><h2 id="providers-heading">模型连接</h2><span>{config?.providers.length ?? 0} 个连接</span></div>
+          <div className="console-section-heading"><span>{config?.providers.length ?? 0} 个连接</span><button className="console-primary" type="button" onClick={() => edit()}><Plus size={15} />添加 AI</button></div>
           {!config && !error ? <div className="console-empty"><LoaderCircle size={22} className="spin" /><p>正在读取配置</p></div> : config?.providers.length ? <div className="provider-grid">{config.providers.map(provider => <article className="provider-card" key={provider.id}>
             <div className="provider-card-heading"><span className="provider-symbol"><Cpu size={19} strokeWidth={1.5} /></span><div><h3>{provider.name}</h3><span className="provider-model">{provider.model}</span></div>
               {config.default_provider_id === provider.id && <span className="default-badge"><Star size={10} fill="currentColor" />默认</span>}</div>
             <div className="provider-url" title={provider.base_url}>{provider.base_url}</div>
             <div className="provider-key-state"><KeyRound size={11} />{provider.has_api_key ? '密钥已配置' : '未配置密钥'}<span className={provider.enabled ? 'provider-enabled' : ''}>{provider.enabled ? '已启用' : '已停用'}</span></div>
+            {/^(https:\/\/api\.deepseek\.com)(:443)?(\/(v1)?(\/chat\/completions)?\/?|)$/.test(provider.base_url) && provider.has_api_key && <DeepseekBalance key={provider.id + '-' + provider.updated_at} id={provider.id} />}
             {testResults[provider.id] && <div className={`provider-test-result${testResults[provider.id].success ? ' success' : ''}`} role="status">{testResults[provider.id].message}</div>}
             <div className="provider-card-actions"><button type="button" className="console-ghost test-provider" onClick={() => { void testProvider(provider.id) }} disabled={!!testing || !provider.enabled}>
               {testing === provider.id ? <LoaderCircle size={13} className="spin" /> : <Play size={12} />} {testing === provider.id ? '测试中' : '测试连接'}</button>
@@ -145,6 +152,8 @@ export default function AdminConsole() {
           </article>)}</div> : <div className="console-empty"><span className="console-empty-icon"><Cpu size={25} strokeWidth={1.4} /></span><h3>添加第一个 AI</h3><p>填写 Base URL、API Key 和模型，即可开始对话。</p><button type="button" className="console-ghost" onClick={() => edit()}><Plus size={14} />添加连接</button></div>}
         </section>}
 
+        {aiTab === 'advanced' && <AdvancedSettings />}
+        {aiTab === 'storage' && <StorageSettings />}
         {aiTab === 'tools' && <ToolsHelp />}
         {aiTab === 'tool-prompts' && <ToolPrompts />}
         {aiTab === 'prompt' && <form id="ai-prompt-panel" className="console-section prompt-section" role="tabpanel" aria-labelledby="ai-tab-prompt" onSubmit={savePrompt}>

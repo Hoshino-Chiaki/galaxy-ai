@@ -21,7 +21,22 @@ const components = {
   table: ({ children }: ComponentProps<'table'>) => <div className="markdown-table-scroll"><table>{children}</table></div>,
 }
 
-export default memo(function MarkdownMessage({ content }: { content: string }) {
+export default memo(function MarkdownMessage({ content, progressive = false, onRevealProgress }: { content: string; progressive?: boolean; onRevealProgress?: () => void }) {
+  const [visibleLength, setVisibleLength] = useState(progressive ? 0 : content.length)
+  useEffect(() => {
+    if (!progressive) { setVisibleLength(content.length); return }
+    setVisibleLength(0)
+    const characters = new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(content)[Symbol.iterator]()
+    const timer = setInterval(() => {
+      const next = characters.next()
+      if (next.done) { clearInterval(timer); return }
+      setVisibleLength(next.value.index + next.value.segment.length)
+    }, 20)
+    return () => clearInterval(timer)
+  }, [content, progressive])
+  const visibleContent = progressive ? content.slice(0, visibleLength) : content
+  const revealing = progressive && visibleLength < content.length
+  useEffect(() => { if (progressive) onRevealProgress?.() }, [visibleLength, progressive, onRevealProgress])
   const [copied, setCopied] = useState(false)
   const [copyError, setCopyError] = useState(false)
   const copiedTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -36,11 +51,11 @@ export default memo(function MarkdownMessage({ content }: { content: string }) {
     } catch { setCopied(false); setCopyError(true) }
   }
   return <div className="assistant-response">
-    <Streamdown className="message-text markdown-message" mode="static" skipHtml controls={false}
+    <Streamdown className="message-text markdown-message" mode={revealing ? 'streaming' : 'static'} isAnimating={revealing} skipHtml controls={false}
       plugins={{ code, cjk }} components={components} shikiTheme={['github-dark', 'github-dark']}>
-      {content}
+      {visibleContent}
     </Streamdown>
-    {!!content.trim() && <button type="button" className="copy-response" onClick={() => { void copy() }} aria-label={copied ? '已复制回复' : copyError ? '复制失败，点击重试' : '复制回复'}>
+    {!revealing && !!content.trim() && <button type="button" className="copy-response" onClick={() => { void copy() }} aria-label={copied ? '已复制回复' : copyError ? '复制失败，点击重试' : '复制回复'}>
       {copied ? <Check size={13} /> : <Copy size={13} />}<span role="status">{copied ? '已复制' : copyError ? '复制失败，点击重试' : '复制'}</span>
     </button>}
   </div>

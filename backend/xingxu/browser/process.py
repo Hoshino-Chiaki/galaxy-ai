@@ -34,7 +34,7 @@ class VirtualDisplay:
 
 
 async def run_json_process(argv, payload, *, cwd, environment, on_event, timeout=180,
-                           output_limit=256 * 1024, line_limit=65536):
+                           output_limit=256 * 1024, line_limit=65536, interactive=None):
     # Internal API only. Public tool input cannot select argv, cwd or environment.
     process = await asyncio.create_subprocess_exec(
         *argv, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
@@ -42,9 +42,10 @@ async def run_json_process(argv, payload, *, cwd, environment, on_event, timeout
         start_new_session=True, limit=line_limit)
     try:
         async with asyncio.timeout(timeout):
-            process.stdin.write(json.dumps(payload).encode())
+            process.stdin.write(json.dumps(payload).encode() + (b"\n" if interactive else b""))
             await process.stdin.drain()
-            process.stdin.close()
+            if not interactive:
+                process.stdin.close()
             total = 0
             while line := await process.stdout.readline():
                 total += len(line)
@@ -54,7 +55,13 @@ async def run_json_process(argv, payload, *, cwd, environment, on_event, timeout
                     event = json.loads(line)
                 except (ValueError, UnicodeError):
                     continue
-                if isinstance(event, dict):
+                if not isinstance(event, dict):
+                    continue
+                if interactive and event.get("event") == "verification_input":
+                    action = await interactive(event)
+                    process.stdin.write(json.dumps(action).encode() + b"\n")
+                    await process.stdin.drain()
+                else:
                     await on_event(event)
             return await process.wait()
     finally:

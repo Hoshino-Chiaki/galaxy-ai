@@ -29,6 +29,12 @@ class ContextPolicy:
     recent_turns: int = 4
 
     @classmethod
+    def from_values(cls, values):
+        return cls(input_tokens=int(values['input_token_budget']),
+                   summary_tokens=int(values['summary_tokens']),
+                   recent_turns=int(values['recent_turns']))
+
+    @classmethod
     def from_environment(cls):
         def setting(name, default, minimum, maximum):
             raw = os.environ.get(name, str(default))
@@ -40,7 +46,9 @@ class ContextPolicy:
                 raise ValueError(f'{name} must be between {minimum} and {maximum}')
             return value
 
-        return cls(input_tokens=setting('GALAXY_AI_INPUT_TOKEN_BUDGET', 48000, 4096, 1000000))
+        return cls(input_tokens=setting('GALAXY_AI_INPUT_TOKEN_BUDGET', 48000, 4096, 1000000),
+                   summary_tokens=setting('GALAXY_AI_SUMMARY_TOKEN_BUDGET', 1024, 256, 8192),
+                   recent_turns=setting('GALAXY_AI_RECENT_TURNS', 4, 1, 20))
 
 
 ASCII = re.compile(r'[\x00-\x7f]+')

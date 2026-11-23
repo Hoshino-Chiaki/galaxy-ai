@@ -16,10 +16,28 @@ ROOT = Path(os.environ.get('GALAXY_DSH_STORAGE', '/opt/galaxy-ai/hosted-files/.d
 JOBS = Path('/run/galaxy-dsh/jobs')
 SOCKET = '/run/galaxy-dsh/runner.sock'
 BROKERS = Path('/opt/galaxy-ai/hosted-files/.dsh-brokers')
+ACCOUNTS = Path(os.environ.get('GALAXY_ACCOUNTS_ROOT', '/opt/galaxy-ai/backend/private/accounts'))
 OWNER = re.compile(r'[0-9a-f]{64}')
 UUID = re.compile(r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}')
 LIMIT = 64 * 1024 * 1024
 active = {}
+
+
+def scope_root(owner):
+    if os.environ.get('GALAXY_ACCOUNT_STORAGE') != 'files-v1':
+        return ROOT / owner
+    registry = json.loads(regular(ACCOUNTS, '.owners.json', 1024 * 1024))
+    record = next((row for row in registry.values() if row.get('runtime_owner') == owner), None)
+    if record is None:
+        raise ValueError('Account scope unavailable')
+    name = record['directory']
+    if not isinstance(name, str) or not name or name.startswith('.') or '/' in name or '\\' in name:
+        raise ValueError('Invalid account scope')
+    root = ACCOUNTS / name / 'tasks' / 'dsh'
+    for path in (ACCOUNTS, ACCOUNTS / name, ACCOUNTS / name / 'tasks', root):
+        if path.is_symlink():
+            raise ValueError('Linked account scope')
+    return root
 
 
 def identifiers(body):
@@ -94,7 +112,18 @@ def tree_size(root):
     return sum(p.stat(follow_symlinks=False).st_size for p in root.rglob('*') if p.is_file() and not p.is_symlink())
 
 
-def jail_arguments(stage, broker, token):
+def account_library(owner):
+    if os.environ.get('GALAXY_ACCOUNT_STORAGE') != 'files-v1':
+        return None
+    account = scope_root(owner).parent.parent
+    library = account / 'workspace' / 'library'
+    for path in (account / 'workspace', library):
+        if path.is_symlink() or not path.is_dir():
+            raise ValueError('Invalid account file library')
+    return library
+
+
+def jail_arguments(stage, broker, token, library=None):
     args = ['/usr/bin/bwrap', '--unshare-all', '--unshare-user', '--die-with-parent', '--new-session',
             '--disable-userns', '--cap-drop', 'ALL', '--uid', '0', '--gid', '0',
             '--ro-bind', '/usr', '/usr', '--tmpfs', '/usr/local',
@@ -106,6 +135,8 @@ def jail_arguments(stage, broker, token):
             '--bind', str(stage / 'workspace'), '/workspace', '--bind', str(stage / 'home'), '/state',
             '--size', str(16 * 1024 * 1024), '--tmpfs', '/tmp', '--dir', '/run',
             '--ro-bind', str(broker), '/run/broker.sock', '--chdir', '/workspace', '--clearenv']
+    if library is not None:
+        args += ['--ro-bind', str(library), '/account-files']
     environment = {'PATH': '/runtime/bin:/runtime/venv/bin:/usr/bin:/bin', 'HOME': '/state',
         'LANG': 'C.UTF-8', 'PYTHONNOUSERSITE': '1', 'PYTHONDONTWRITEBYTECODE': '1',
         'GALAXY_RUN_TOKEN': token, 'NODE_OPTIONS': '--max-old-space-size=256'}
@@ -133,7 +164,8 @@ async def run_job(body, reader, writer):
     active[identifier] = stage
     process = None
     monitor = None
-    target = ROOT / owner / conversation / identifier
+    storage = scope_root(owner)
+    target = storage / conversation / identifier
     try:
         stage.mkdir(mode=0o700)
         (stage / 'workspace').mkdir(mode=0o700)
@@ -142,7 +174,7 @@ async def run_job(body, reader, writer):
         if previous:
             if not isinstance(previous, str) or not UUID.fullmatch(previous):
                 raise ValueError('Invalid checkpoint')
-            source = ROOT / owner / conversation / previous
+            source = storage / conversation / previous
             if not (source / 'complete').is_file():
                 raise ValueError('Checkpoint missing')
             copy_regular(source / 'workspace', stage / 'workspace', 32 * 1024 * 1024)
@@ -151,7 +183,8 @@ async def run_job(body, reader, writer):
         if not broker.is_socket():
             raise ValueError('Broker missing')
         await send(writer, {'type': 'ready'})
-        process = await asyncio.create_subprocess_exec(*jail_arguments(stage, broker, body['token']),
+        library = account_library(owner) if body.get('account_files') is True else None
+        process = await asyncio.create_subprocess_exec(*jail_arguments(stage, broker, body['token'], library),
             stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
             start_new_session=True, limit=1024 * 1024)
         process.stdin.write(json.dumps(body['input'], ensure_ascii=False).encode())
@@ -209,7 +242,7 @@ async def run_job(body, reader, writer):
             for old in target.parent.iterdir():
                 if old.is_dir() and old.name not in (identifier, previous) and UUID.fullmatch(old.name):
                     shutil.rmtree(old)
-            if tree_size(ROOT / owner) > 128 * 1024 * 1024:
+            if tree_size(storage) > 128 * 1024 * 1024:
                 raise ValueError('Account storage quota exceeded')
             (target / 'complete').write_text('1')
             result['run_id'] = identifier
@@ -246,7 +279,7 @@ async def client(reader, writer):
             owner, conversation = identifiers(body)
             if active:
                 raise ValueError('Worker busy')
-            target = ROOT / owner / conversation
+            target = scope_root(owner) / conversation
             if target.exists():
                 shutil.rmtree(target)
             await send(writer, {'ok': True})

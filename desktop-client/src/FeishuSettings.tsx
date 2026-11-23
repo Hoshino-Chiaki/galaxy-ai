@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
-import { CheckCircle2, ExternalLink, KeyRound, Link2, LoaderCircle, LogOut, RefreshCw, Save, ShieldCheck } from 'lucide-react'
+import { CheckCircle2, ExternalLink, KeyRound, Link2, LoaderCircle, LogOut, MessageCircle, RefreshCw, Save, ShieldCheck } from 'lucide-react'
 import { service } from './service'
 import { copyText } from './clipboard'
 
-type Config = { configured: boolean; app_id: string; has_app_secret?: boolean; connected: boolean; cli_ready: boolean;
+type BotStatus = { configured: boolean; status: string; identity_bound: boolean; allowed: boolean; last_message_at?: number | null; last_reply_at?: number | null; error?: string | null; required_scopes: string[]; event: string }
+type Config = { bot?: BotStatus; configured: boolean; app_id: string; has_app_secret?: boolean; connected: boolean; cli_ready: boolean;
   identity: { name: string; open_id: string; tenant_key: string } | null; expires_at: number | null; refresh_expires_at: number | null;
   scopes: string[]; required_scopes: string[];
   authorization_mode?: 'all'; granted_scope_count?: number;
@@ -11,7 +12,7 @@ type Config = { configured: boolean; app_id: string; has_app_secret?: boolean; c
   pending: { id: string; url: string; user_code: string; expires_at: number; interval: number } | null }
 const date = (value?: number | null) => value ? new Date(value * 1000).toLocaleString('zh-CN', { hour12: false }) : '—'
 
-export default function FeishuSettings({ user }: { user: CurrentUser }) {
+export default function FeishuSettings({ user, mode = 'personal' }: { user: CurrentUser; mode?: 'personal' | 'application' }) {
   const [config, setConfig] = useState<Config | null>(null)
   const [appId, setAppId] = useState(''), [secret, setSecret] = useState('')
   const [busy, setBusy] = useState(false), [error, setError] = useState(''), [notice, setNotice] = useState('')
@@ -23,7 +24,18 @@ export default function FeishuSettings({ user }: { user: CurrentUser }) {
     return () => { valid = false; alive.current = false }
   }, [])
   useEffect(() => {
-    if (!config?.pending) return
+    let valid = true, inFlight = false
+    const timer = window.setInterval(async () => {
+      if (inFlight) return
+      inFlight = true
+      try { const bot = await service<BotStatus>('feishu.bot'); if (valid) setConfig(old => old ? { ...old, bot } : old) }
+      catch { /* Retain the existing status on transient network errors. */ }
+      finally { inFlight = false }
+    }, 10000)
+    return () => { valid = false; window.clearInterval(timer) }
+  }, [])
+  useEffect(() => {
+    if (mode !== 'personal' || !config?.pending) return
     const pending = config.pending
     const timer = window.setInterval(() => {
       if (polling.current) return
@@ -34,7 +46,7 @@ export default function FeishuSettings({ user }: { user: CurrentUser }) {
       }).catch(reason => { if (alive.current) setError(reason.message); window.clearInterval(timer) }).finally(() => { polling.current = false })
     }, Math.max(1, pending.interval) * 1000)
     return () => window.clearInterval(timer)
-  }, [config?.pending?.id, config?.pending?.interval])
+  }, [mode, config?.pending?.id, config?.pending?.interval])
   async function save(event: FormEvent) {
     event.preventDefault(); if (busy) return
     setBusy(true); setError(''); setNotice('')
@@ -58,11 +70,11 @@ export default function FeishuSettings({ user }: { user: CurrentUser }) {
     catch (reason) { if (alive.current) setError((reason as Error).message) }
     finally { if (alive.current) setBusy(false) }
   }
-  return <div className="console-body feishu-settings">
-    <div className="console-page-heading"><div><h1>飞书</h1><p>连接自己的飞书账号，按授权范围使用文档、表格、消息等业务能力。</p></div><span className="console-status"><span className="status-dot" />{config?.business_operations ? `${config.business_domains} 个业务域 · ${config.business_operations} 个操作` : '个人授权'}</span></div>
+  return <div className={"console-body feishu-settings " + (mode === 'application' ? 'feishu-app-settings' : 'feishu-personal-settings')}>
+    <div className="console-status-toolbar"><span className="console-status"><span className="status-dot" />{mode === 'application' ? '企业应用设置' : config?.business_operations ? `${config.business_domains} 个业务域 · ${config.business_operations} 个操作` : '个人授权'}</span></div>
     <div className="console-notification" role="status">{error ? <span className="console-error">{error}</span> : notice ? <span className="console-success"><CheckCircle2 size={14} />{notice}</span> : null}</div>
     {!config ? <div className="console-empty"><LoaderCircle className="spin" /><p>{error ? '无法读取飞书连接' : '正在读取连接'}</p></div> : <>
-      {admin && <form className="youzan-account-card" onSubmit={save}>
+      {mode === 'application' && admin && <form className="youzan-account-card" onSubmit={save}>
         <div className="youzan-section-title"><span className="provider-symbol"><KeyRound size={18} /></span><div><h2>企业应用 · OAuth</h2><p>管理员统一配置，成员分别授权自己的飞书账号。</p></div></div>
         <div className="console-form-grid">
           <div className="console-field"><label htmlFor="feishu-app-id">App ID</label><input id="feishu-app-id" value={appId} disabled={busy} placeholder="cli_xxxxxxxxxx" required maxLength={104} onChange={event => setAppId(event.target.value)} /></div>
@@ -72,7 +84,7 @@ export default function FeishuSettings({ user }: { user: CurrentUser }) {
         <p className="console-section-description">管理员在飞书开放平台一次性开通用户身份权限并发布，员工只需连接自己的账号。服务器统一申请全部已接入权限，自动使用和刷新实际获得的授权。</p>
         <details className="feishu-scopes"><summary>全部业务权限 · 飞书批量导入 JSON</summary><pre>{JSON.stringify(config.permission_import || { scopes: { user: config.required_scopes } }, null, 2)}</pre><button type="button" className="console-ghost" onClick={() => { void copyText(JSON.stringify(config.permission_import || { scopes: { user: config.required_scopes } }, null, 2)).then(() => setNotice('权限 JSON 已复制。')).catch(() => setError('复制失败，请重试。')) }}>复制权限 JSON</button></details>
       </form>}
-      <section className="youzan-account-card feishu-connection">
+      {mode === 'personal' && <section className="youzan-account-card feishu-connection">
         <div className="youzan-section-title"><span className="provider-symbol"><Link2 size={18} /></span><div><h2>我的飞书账号</h2><p>{config.connected ? '已连接 · ' + (config.identity?.name || '飞书用户') : config.configured ? '企业应用已配置，授权后即可使用' : '请等待管理员配置企业应用'}</p></div><span className={'youzan-badge' + (config.connected ? ' ready' : '')}>{config.connected ? '已授权' : '未授权'}</span></div>
         <p className="console-section-description">AI 自动使用你已授权且有权访问的全部能力，服务器自动刷新授权，无需按业务选择范围。飞书要求重新确认时，点击补全授权即可。</p>
         {admin && config.connected && <details className="feishu-scopes"><summary>授权详情 · {config.granted_scope_count ?? config.scopes.length} 项实际权限</summary><dl className="feishu-identity"><div><dt>当前凭证有效期</dt><dd>{date(config.expires_at)}</dd></div><div><dt>续期凭证有效期</dt><dd>{date(config.refresh_expires_at)}</dd></div></dl><pre>{config.scopes.join('\n')}</pre></details>}
@@ -82,7 +94,14 @@ export default function FeishuSettings({ user }: { user: CurrentUser }) {
           {config.connected && <button type="button" className="console-ghost" disabled={busy} onClick={() => { void disconnect() }}><LogOut size={13} />断开连接</button>}
           <button type="button" className="console-primary" disabled={busy || !config.configured || !config.cli_ready} onClick={() => { void authorize() }}>{busy ? <LoaderCircle size={14} className="spin" /> : config.connected ? <RefreshCw size={14} /> : <ExternalLink size={14} />}{config.connected ? '补全授权' : '连接飞书'}</button>
         </div></div>
-      </section>
+      </section>}
+      {config.bot && <section className="youzan-account-card feishu-bot-card">
+        <div className="youzan-section-title"><span className="provider-symbol"><MessageCircle size={18} /></span><div><h2>Galaxy AI · 飞书机器人</h2><p>{mode === 'application' ? '机器人直接连接服务器上的 Galaxy AI，复用现有模型和工具。' : '私聊机器人，使用你自己的 Galaxy 权限与渠道账号。'}</p></div></div>
+        <div className="feishu-bot-status"><span className={'console-status ' + (config.bot.status === 'connected' ? 'ready' : '')}><span className="status-dot" />{{connected:'长连接已建立',starting:'正在连接',reconnecting:'正在重连',error:'连接异常',not_configured:'请先配置企业应用'}[config.bot.status] || '等待连接'}</span>{mode === 'personal' && <span>{!config.bot.allowed ? '当前未开通机器人对话权限' : config.bot.identity_bound ? '已关联本人的 Galaxy 账号' : '请先连接本人的飞书账号'}</span>}</div>
+        {config.bot.error && <p className="console-error" role="status">{config.bot.error}</p>}
+        {mode === 'application' && <><p className="console-section-description">飞书开放平台 → 当前应用 → 事件与回调，选择“使用长连接接收事件”，添加“接收消息”事件（im.message.receive_v1）。开通下方机器人权限并发布生效后，即可私聊机器人。</p><button type="button" className="console-ghost" onClick={() => { void copyText(JSON.stringify({scopes:{tenant:config.bot!.required_scopes}}, null, 2)).then(() => setNotice('机器人权限 JSON 已复制。')).catch(() => setError('复制失败，请重试。')) }}>复制机器人权限 JSON</button></>}
+        {mode === 'personal' && <p className="console-section-description">机器人会按飞书授权身份识别本人。可提问“查看我的账号信息”；该入口目前支持文字私聊。</p>}
+      </section>}
     </>}
   </div>
 }

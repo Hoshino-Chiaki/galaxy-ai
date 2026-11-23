@@ -201,5 +201,7 @@ def register(registry):
     @registry.tool(name='youzan.business-report', category='youzan', description=DESCRIPTION, input_schema=INPUT, output_schema=OUTPUT)
     def business_report(arguments):
         arguments = normalize(arguments)
-        client = YouzanClient(category_credentials('youzan'))
+        # CRM discovery origin identifies a page, not report API compatibility.
+        # Reports use only the fixed merchant gateway/Carmen endpoints above.
+        client = YouzanClient({**category_credentials('youzan'), 'origin': 'https://store.youzan.com'})
         return options(client, arguments) if arguments['action'] == 'options' else query(client, arguments)

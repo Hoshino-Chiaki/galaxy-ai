@@ -12,7 +12,13 @@ def permissions(command, canonical):
     name=command.split('.',1)[1]
     if name=='authorized-users':return {'feishu:read','feishu:attendance:company:read'}
     body=strict_json(canonical[canonical.index('--input')+1])
-    return {'feishu:write' if name in DOMAINS and is_write(name,body) else 'feishu:read'}
+    if name in DOMAINS and is_write(name,body):
+        action=body.get('action','').split('.')[-1]
+        if any(word in action for word in ('delete','remove','revoke','destroy')):kind='delete'
+        elif any(word in action for word in ('create','add','copy','import','send','reply','upload')):kind='create'
+        else:kind='update'
+        return {'feishu:write','feishu:'+kind}
+    return {'feishu:read'}
 
 
 def arguments(args):

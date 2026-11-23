@@ -58,6 +58,22 @@ export default function App() {
   }, [])
 
   useEffect(() => {
+    if (!session?.user.id || !window.desktop) return
+    let valid = true
+    async function refreshPermissions() {
+      try {
+        const result = await window.desktop!.auth.current()
+        if (valid && result.ok) setSession(result.data)
+      } catch { /* A network failure does not discard a valid local session. */ }
+    }
+    const timer = setInterval(() => { void refreshPermissions() }, 30000)
+    const refresh = () => { void refreshPermissions() }
+    window.addEventListener('galaxy:permissions-changed', refresh)
+    window.addEventListener('focus', refresh)
+    return () => { valid = false; clearInterval(timer); window.removeEventListener('galaxy:permissions-changed', refresh); window.removeEventListener('focus', refresh) }
+  }, [session?.user.id])
+
+  useEffect(() => {
     if (!ready) return
     const timeout = setTimeout(() => {
       writePreferences({ account, remember }).catch(() => {
@@ -148,7 +164,7 @@ export default function App() {
       </div>}
     </header>
 
-    {session ? <Workspace key={session.user.id} user={session.user} onLogout={logout} signingOut={submitting} error={error} /> : <div className="page">
+    {session ? <Workspace key={session.user.id} user={session.user} onLogout={logout} signingOut={submitting} error={error} onProfileChange={profile => setSession(current => current ? { ...current, user: { ...current.user, name: profile.name, avatar: profile.avatar } } : current)} /> : <div className="page">
       <main className="login-layout">
         <section className="login-card" aria-labelledby="login-heading">
           <div className="login-brand">galaxy ai</div>

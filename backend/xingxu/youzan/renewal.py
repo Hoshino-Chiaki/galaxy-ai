@@ -15,11 +15,24 @@ MANUAL = {'sms_verification_required', 'human_verification_required', 'login_rej
           'profile_account_mismatch', 'credentials_missing', 'login_unconfirmed'}
 
 
+def scheduled_at(record, kind, entry):
+    """A successful SID check must not postpone renewal beyond cookie expiry.
+
+    Failed attempts keep their retry deadline, including when SID is expired.
+    """
+    deadline = entry.get('next_at')
+    expires = record.get('sid', {}).get('expires_at')
+    if kind == 'sid' and deadline and expires and not entry.get('error'):
+        return min(deadline, expires)
+    return deadline
+
+
 def public_schedule(record):
     policy = (record or {}).get('renewal', {})
     return {kind: {**{'enabled': False, 'interval_days': 2},
                    **{k: v for k, v in policy.get(kind, {}).items() if k in
-                      ('enabled', 'interval_days', 'next_at', 'last_attempt_at', 'last_success_at', 'error', 'paused')}}
+                      ('enabled', 'interval_days', 'next_at', 'last_attempt_at', 'last_success_at', 'error', 'paused')},
+                   **({'next_at': scheduled_at(record, kind, policy[kind])} if kind in policy else {})}
             for kind in KINDS}
 
 
@@ -45,7 +58,7 @@ class YouzanRenewal:
         if (not raw or not raw.get('active') or raw.get('workspace_id') != grant.workspace_id
                 or raw.get('auth_version') != grant.auth_version):
             raise AuthFailure('forbidden', '自动刷新授权已失效，请管理员重新保存设置。', 403)
-        user = public_user(raw)
+        user = self.auth._public(raw)
         if PERMISSION not in user['permissions'] or 'youzan:configure' not in user['permissions']:
             raise AuthFailure('forbidden', '当前账号无权执行自动刷新。', 403)
         from .service import owner_key
@@ -81,6 +94,8 @@ class YouzanRenewal:
                 policy[kind] = {**settings, **{k: old[k] for k in ('last_attempt_at', 'last_success_at') if k in old},
                                 'next_at': max(now, base + settings['interval_days'] * DAY) if settings['enabled'] else None,
                                 'paused': False, 'error': None}
+                if policy[kind]['next_at']:
+                    policy[kind]['next_at'] = max(now, scheduled_at(record, kind, policy[kind]))
             record['renewal'] = policy
         self.wake.set()
         return self.service.summary(user)
@@ -121,6 +136,7 @@ class YouzanRenewal:
                          next_at=None if pause else now + (entry['interval_days'] * DAY if success else RETRY))
             if success:
                 entry['last_success_at'] = now
+                entry['next_at'] = scheduled_at(state['connections'][key], kind, entry)
 
     async def tick(self):
         with self.service.repo.transaction(write=False) as state:
@@ -138,7 +154,8 @@ class YouzanRenewal:
                 continue
             for kind in KINDS:
                 entry = policy.get(kind, {})
-                if not entry.get('enabled') or entry.get('paused') or not entry.get('next_at') or entry['next_at'] > time.time():
+                deadline = scheduled_at(record, kind, entry)
+                if not entry.get('enabled') or entry.get('paused') or not deadline or deadline > time.time():
                     continue
                 grant = RefreshGrant(key, policy['user_id'], policy['workspace_id'],
                                      policy['auth_version'], policy['revision'], kind)
@@ -168,5 +185,15 @@ class YouzanRenewal:
                     self._record_attempt(key, policy['revision'], kind,
                         error={'code': error.code, 'message': error.message},
                         pause=error.code in MANUAL or error.code == 'forbidden')
+                    if kind == 'csrf' and error.code in ('login_required', 'missing_sid'):
+                        # Expiry can precede the browser deadline. Ask the authorized SID
+                        # task to recover it; CRM itself never launches a second login.
+                        with self.service.repo.transaction() as state:
+                            current = state['connections'].get(key, {}).get('renewal', {})
+                            sid = current.get('sid', {})
+                            if (current.get('revision') == policy['revision'] and sid.get('enabled')
+                                    and not sid.get('paused') and not sid.get('error')):
+                                sid['next_at'] = int(time.time())
+                                self.wake.set()
                     if kind == 'sid':
                         break

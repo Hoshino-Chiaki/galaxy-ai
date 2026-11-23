@@ -56,12 +56,12 @@ def isolated_ai(monkeypatch, tmp_path):
 
     class Dispatcher:
         def __init__(self, directory, authorize):
-            pass
+            self.shop_choices = None
 
         def definitions(self, context):
             return [{'type': 'function', 'function': {'name': 'galaxy_cli', 'parameters': {'type': 'object'}}}]
 
-        async def execute(self, context, request):
+        async def execute(self, context, request, *, interaction=None):
             return {'status': 'success', 'result': {'fixture': request['id']}}
 
     class ToolPrompts:
@@ -119,7 +119,7 @@ def test_real_service_uses_graph_and_preserves_model_parameters_and_tool_gateway
                    if len(requests) == 1 else {'content': 'all done', 'reasoning_content': 'final-reasoning'})
         return httpx.Response(200, json={'choices': [{'message': message}], 'usage': {'total_tokens': 10}})
 
-    async def execute(context, request):
+    async def execute(context, request, *, interaction=None):
         executed.append((context, request))
         return {'status': 'denied' if request['id'] == 'two' else 'success', 'result': {'id': request['id']}}
 
@@ -312,7 +312,7 @@ def test_gateway_interruption_retains_completed_events_and_discards_incomplete_t
     async def scenario():
         started = asyncio.Event()
 
-        async def execute(context, request):
+        async def execute(context, request, *, interaction=None):
             event = {'status': 'success', 'result': {'id': request['id']}}
             if request['id'] == 'first':
                 return event
@@ -372,7 +372,7 @@ def test_large_identical_tool_results_are_referenced_but_every_execution_and_raw
                  if len(requests) == 1 else {'content': 'seven calls finished'})
         return httpx.Response(200, json={'choices': [{'message': reply}]})
 
-    async def execute(context, request):
+    async def execute(context, request, *, interaction=None):
         executed.append(request['id'])
         return {'status': 'success', 'result': copy.deepcopy(large_result)}
 

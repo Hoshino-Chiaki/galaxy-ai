@@ -97,9 +97,12 @@ def test_global_prompt_server_context_and_cross_user_history(setup):
     assert len(requests) == count
     assert client.post("/api/v1/chat/send", headers=employee, json={"message": "下一个问题", "conversation_id": cid}).status_code == 200
     roles = [item["role"] for item in requests[-1][2]["messages"]]
-    assert roles == ["system", "system", "user", "assistant", "user"]
+    # Current server policy can add category, date and clarification instructions.
+    assert roles[-3:] == ["user", "assistant", "user"]
+    assert roles[:-3] and all(role == 'system' for role in roles[:-3])
     from galaxy_cli.tool_categories import TASK_SYSTEM_PROMPT
-    assert requests[-1][2]['messages'][1]['content'] == '【工具分类：任务系统】\n' + TASK_SYSTEM_PROMPT
+    assert any(item == {'role': 'system', 'content': '【工具分类：任务系统】\n' + TASK_SYSTEM_PROMPT}
+               for item in requests[-1][2]['messages'])
     invalid = client.post("/api/v1/chat/send", headers=employee, json={"message": "override", "system_prompt": "wrong"})
     assert invalid.status_code == 422
     assert client.delete(f"/api/v1/chat/conversations/{cid}", headers=employee).status_code == 200

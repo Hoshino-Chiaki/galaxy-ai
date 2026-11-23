@@ -17,4 +17,4 @@ galax-cli = "galaxy_cli.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-galaxy_cli = ["feishu_catalog.json"]
+galaxy_cli = ["feishu_catalog.json", "gjp/*.json"]

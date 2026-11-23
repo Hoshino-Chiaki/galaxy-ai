@@ -7,9 +7,9 @@ from galaxy_cli.tools.youzan.customer_get import normalize as normalize_customer
 from galaxy_cli.tools.youzan.customer_count import normalize as normalize_customer_count
 from galaxy_cli.tools.youzan.business_report import normalize as normalize_report, succeeded as report_succeeded, OPTION_KEYS
 from galaxy_cli.youzan_catalog import NAMES as CATALOG_NAMES, ACTIONS as CATALOG_ACTIONS, permissions as catalog_permissions
-from galaxy_cli.tools.youzan import material_category, material_list, material_upload, product_get, product_options, product_update, product_search, product_group
+from galaxy_cli.tools.youzan import material_category, material_list, material_upload, product_get, product_options, product_update, product_search, product_group, order_search
 CATALOG_MODULES={module.__name__.rsplit('.',1)[-1].replace('_','-'):module for module in
-    (material_category,material_list,material_upload,product_get,product_options,product_update,product_search,product_group)}
+    (material_category,material_list,material_upload,product_get,product_options,product_update,product_search,product_group,order_search)}
 
 
 def normalize_catalog(args):

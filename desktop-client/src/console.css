@@ -200,3 +200,22 @@
 .feishu-settings .console-form-grid { margin-bottom: 20px; }
 .feishu-settings .youzan-account-card > .console-section-description { margin-top: 16px; line-height: 1.8; }
 @media (max-width: 860px) { .feishu-settings .console-form-grid, .feishu-identity { grid-template-columns: 1fr; } .feishu-settings .youzan-account-footer { align-items: flex-start; flex-direction: column; } }
+
+.advanced-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; padding: 20px; border: 1px solid #353535; border-radius: 13px; background: #1c1c1c; }
+.advanced-grid .console-field { display: flex; flex-direction: column; gap: 8px; margin: 0; }
+.advanced-grid .console-field > span { color: #b7b7b7; font-size: 11px; }
+.advanced-grid .console-field small { color: #858585; font-size: 9px; line-height: 1.6; }
+@media (max-width: 760px) { .advanced-grid { grid-template-columns: 1fr; } }
+
+.personnel-placeholder { margin-top: 28px; min-height: 230px; }
+
+.console-status-toolbar { display: flex; justify-content: flex-end; margin-bottom: 18px; }
+.console-body > .console-tabs:first-child { margin-top: 0; }
+
+.console-notification:empty { display: none; }
+.youzan-login-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.youzan-shop-permissions>.shop-session-list{margin-top:12px}.youzan-shop-permissions .shop-session-row{transition:background-color .15s ease}.youzan-shop-permissions .shop-session-row:hover{background:#282e35}@media(prefers-reduced-motion:reduce){.youzan-shop-permissions .shop-session-row{transition:none}}
+
+.provider-balance{border:1px solid #97aca120;border-radius:10px;padding:11px 12px;margin:13px 0 5px;background:#81ab8c08}.provider-balance-label{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}.provider-balance-label>span{display:flex;align-items:center;gap:6px;font-size:10px;color:#a4b6ad}.provider-balance-label button{display:grid;place-items:center;background:transparent;border:0;color:#93a69b;cursor:pointer;padding:2px}.provider-balance-label button:disabled{opacity:.5;cursor:wait}.provider-balance-label button:focus-visible{outline:2px solid #adcbba;outline-offset:3px}.provider-balance-value{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 12px;margin-bottom:7px}.provider-balance-value strong{font-size:19px;color:#d9e9df;font-weight:500;letter-spacing:.3px}.provider-balance-value>span,.provider-balance-hint{font-size:9px;color:#84998e}.provider-balance-hint.insufficient,.provider-balance-error{color:#d3a39e}.provider-balance-error{font-size:10px;line-height:1.7}
+
+.feishu-bot-card{margin-top:20px}.feishu-bot-status{display:flex;align-items:center;flex-wrap:wrap;gap:12px;margin:20px 0;color:#9aa7b3;font-size:11px}.feishu-bot-status .ready{color:#a8ccbb}.feishu-bot-status .ready .status-dot{background:#9ebba9}.feishu-bot-card>.console-section-description{font-size:11px;line-height:1.9;margin-top:16px}
+.guanjia-database-field{margin-bottom:20px}.guanjia-database-field>label{display:flex;align-items:center;gap:7px}.guanjia-database-control{display:flex;gap:9px}.guanjia-database-control select{flex:1;min-width:0;color-scheme:dark;color:#d9e2ea;background:#1d2228;border:1px solid #6e7b8e40;border-radius:9px;padding:12px 14px;font:inherit;font-size:12px;outline:none;transition:border-color .15s ease}.guanjia-database-control select:hover,.guanjia-database-control select:focus-visible{border-color:#8ba6b878}.guanjia-database-control select:disabled{opacity:.5}.guanjia-database-control button{flex:0 0 43px}.guanjia-database-id{margin-left:8px;color:#738393;font-size:10px}

@@ -1,6 +1,16 @@
 const { contextBridge, ipcRenderer } = require('electron')
 
 contextBridge.exposeInMainWorld('desktop', {
+  updates: {
+    state: () => ipcRenderer.invoke('updates:state'),
+    check: () => ipcRenderer.invoke('updates:check'),
+    install: () => ipcRenderer.invoke('updates:install'),
+    onStatus: callback => {
+      const listener = (_event, value) => callback(value)
+      ipcRenderer.on('updates:status', listener)
+      return () => ipcRenderer.removeListener('updates:status', listener)
+    },
+  },
   clipboard: {
     writeText: value => ipcRenderer.invoke('clipboard:write-text', value),
   },

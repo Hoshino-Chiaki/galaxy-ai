@@ -11,6 +11,7 @@ class ExecutionContext:
     permissions: tuple[str, ...]
     conversation_id: str
     session_token: str = field(repr=False)
+    background_run: bool = False
 
 
 class DispatchDenied(Exception):

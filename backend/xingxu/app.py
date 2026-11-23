@@ -19,15 +19,30 @@ from pydantic import BaseModel, ConfigDict, Field, StrictBool
 
 from .auth import AuthFailure, AuthPolicy, AuthService
 from .store import JsonRepository
-from .ai import AiService, ProviderInput, PromptInput, DefaultInput, ChatInput
+from .ai import AiService, ProviderInput, PromptInput, DefaultInput, AdvancedInput, ChatInput
+from .guanjia import GuanjiaService
+from .guanjia.routes import create_router as guanjia_router
 from .youzan import YouzanService
 from .youzan.routes import create_router as youzan_router
 from .feishu import FeishuService
+from .feishu.bot import FeishuBot
 from .feishu.routes import create_router as feishu_router
 from .tools import ExecutionContext
 from .files import MIME
 from .deployment import production_directory
 from .uploads import MAX_UPLOAD
+from .usage_routes import create_router as usage_router
+from .updates import create_router as updates_router
+from .employees import create_router as employees_router
+from .database import DatabaseUnavailable
+from .profile import create_router as profile_router
+from .departments import create_router as departments_router
+from .permissions import create_router as permissions_router
+from .account_info import AccountInfo
+from .clawbot import ClawbotService
+from .clawbot.routes import create_router as clawbot_router
+from .schedule import ScheduleService
+from .schedule.routes import create_router as schedule_router
 
 
 class LoginRequest(BaseModel):
@@ -35,6 +50,20 @@ class LoginRequest(BaseModel):
     username: str = Field(min_length=1, max_length=160)
     password: str = Field(min_length=1, max_length=256)
     remember: StrictBool = False
+
+
+class ClarificationAnswer(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    question_id: str = Field(min_length=1, max_length=64)
+    option_id: str | None = Field(default=None, min_length=1, max_length=64)
+    text: str | None = Field(default=None, min_length=1, max_length=4000)
+
+
+class ClarificationInput(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    request_id: uuid.UUID
+    interaction_id: uuid.UUID
+    answers: list[ClarificationAnswer] = Field(min_length=1, max_length=3)
 
 
 class CancelChatInput(BaseModel):
@@ -55,13 +84,22 @@ def scoped_download(path, filename, media_type):
         headers=headers, background=BackgroundTask(stream.close))
 
 
-def create_app(data_dir=None, policy=None, ai_transport=None, youzan_transport=None, youzan_login_runner=None, feishu_transport=None):
+def create_app(data_dir=None, policy=None, ai_transport=None, youzan_transport=None, youzan_login_runner=None, feishu_transport=None, clawbot_transport=None):
     application = FastAPI(title="galaxy ai", version="0.1.0", docs_url=None, redoc_url=None, openapi_url=None)
     directory = Path(data_dir) if data_dir is not None else production_directory()
     service = AuthService(JsonRepository(directory), policy or AuthPolicy())
     application.state.auth = service
     ai = AiService(directory, ai_transport, authorize=service.identity)
     application.state.ai = ai
+    from .file_storage import FileStorage
+    storage = FileStorage(ai.dispatcher.files, ai.config)
+    storage.reauthorize = lambda bearer: service.identity(bearer)['user']
+    application.state.file_storage = storage
+    ai.dispatcher.uploads.storage = storage
+    storage.uploads = ai.dispatcher.uploads
+    guanjia = GuanjiaService(directory, ai.cipher)
+    application.state.guanjia = guanjia
+    ai.dispatcher.gjp_provider = guanjia
     youzan = YouzanService(directory, ai.cipher, transport=youzan_transport,
                           login_runner=youzan_login_runner, authorize=service.identity)
     application.state.youzan = youzan
@@ -69,15 +107,28 @@ def create_app(data_dir=None, policy=None, ai_transport=None, youzan_transport=N
     youzan.renewal = YouzanRenewal(youzan, service)
     feishu = FeishuService(directory, ai.cipher, transport=feishu_transport)
     application.state.feishu = feishu
+    feishu.bot = FeishuBot(directory, service, ai, feishu)
+    application.state.feishu_bot = feishu.bot
     ai.dispatcher.feishu_provider = feishu
     ai.dispatcher.category_provider = youzan.tool_credentials
+    ai.dispatcher.shop_choices = youzan.tool_shop_options
     ai.dispatcher.shop_resolver = youzan.resolve_shop_credentials
     ai.dispatcher.operation_guard = youzan.operation_guard
     ai.dispatcher.shop_provider = youzan.tool_credentials
+    schedules = ScheduleService(directory, service, ai)
+    application.state.schedules = schedules
+    clawbot = ClawbotService(directory, service, ai, transport=clawbot_transport)
+    application.state.clawbot = clawbot
+    ai.dispatcher.clawbot_provider = clawbot
+    ai.dispatcher.account_provider = AccountInfo(youzan=youzan, feishu=feishu, guanjia=guanjia, clawbot=clawbot)
+    ai.dispatcher.schedule_provider = schedules
 
     @asynccontextmanager
     async def lifespan(_app):
         youzan.renewal.start()
+        schedules.start()
+        clawbot.start()
+        feishu.bot.start()
         housekeeping = asyncio.create_task(ai.dispatcher.uploads.housekeeping())
         try:
             yield
@@ -85,6 +136,9 @@ def create_app(data_dir=None, policy=None, ai_transport=None, youzan_transport=N
             housekeeping.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await housekeeping
+            await feishu.bot.close()
+            await clawbot.close()
+            await schedules.close()
             await youzan.close()
     application.router.lifespan_context = lifespan
     bearer = HTTPBearer(auto_error=False)
@@ -96,12 +150,18 @@ def create_app(data_dir=None, policy=None, ai_transport=None, youzan_transport=N
         maximum = 8192 if request.url.path == "/api/v1/auth/login" else 128 * 1024
         if request.method == 'PUT' and re.fullmatch(r'/api/v1/uploads/[0-9a-f-]{36}/content', request.url.path):
             maximum = MAX_UPLOAD
+        if request.method == 'PUT' and re.fullmatch(r'/api/v1/storage/uploads/[0-9a-f-]{36}/content', request.url.path):
+            maximum = storage.settings()['quota_bytes']
         if not length.isdigit() or int(length) > maximum:
             return JSONResponse({"error": {"code": "invalid_input", "message": "请求内容过大。"}}, status_code=413)
         response = await call_next(request)
         response.headers["Cache-Control"] = "no-store"
         response.headers["X-Content-Type-Options"] = "nosniff"
         return response
+
+    @application.exception_handler(DatabaseUnavailable)
+    async def database_failure(_request, _error):
+        return JSONResponse({"error":{"code":"database_unavailable","message":"数据库暂不可用，请稍后重试。"}},status_code=503)
 
     @application.exception_handler(AuthFailure)
     async def auth_failure(_request, error):
@@ -132,17 +192,33 @@ def create_app(data_dir=None, policy=None, ai_transport=None, youzan_transport=N
         return value["user"]
 
 
+    application.include_router(guanjia_router(guanjia, identity))
     application.include_router(youzan_router(youzan, identity, token))
     application.include_router(feishu_router(feishu, identity, token))
+    application.include_router(updates_router())
+    application.include_router(usage_router(ai.usage_store, service, identity))
+    application.include_router(employees_router(identity))
+    application.include_router(departments_router(identity))
+    application.include_router(permissions_router(identity))
+    application.include_router(profile_router(identity, token))
+    from .file_storage_routes import create_router as file_storage_router
+    application.include_router(file_storage_router(storage, identity, token, scoped_download))
+    application.include_router(schedule_router(schedules, identity))
+    application.include_router(clawbot_router(clawbot, identity))
 
     @application.get("/health")
     def health():
-        return {"status": "ok", "service": "galaxy-ai", "version": "0.1.0"}
+        from .account_storage import enabled
+        return {"status": "ok", "service": "galaxy-ai", "version": "0.1.0", "storage": "mysql+account-files" if enabled(directory) else "mysql" if os.environ.get("GALAXY_DATABASE_CONFIG") else "json"}
 
     @application.post("/api/v1/auth/login")
     def login(body: LoginRequest, request: Request):
-        return service.login(body.username, body.password, body.remember,
-                             request.client.host if request.client else "unknown")
+        result = service.login(body.username, body.password, body.remember,
+                               request.client.host if request.client else "unknown")
+        from .account_storage import enabled, Accounts
+        if enabled(directory):
+            Accounts(directory).ensure(result['user'])
+        return result
 
     @application.get("/api/v1/auth/me")
     def current_user(value: Annotated[dict, Depends(identity)]):
@@ -193,7 +269,12 @@ def create_app(data_dir=None, policy=None, ai_transport=None, youzan_transport=N
 
     @application.post("/api/v1/admin/ai/providers/{identifier}/test")
     async def test_provider(identifier: uuid.UUID, _user: Annotated[dict, Depends(administrator)]):
-        return await ai.test(identifier)
+        return await ai.test(identifier, _user)
+
+    @application.get("/api/v1/admin/ai/providers/{identifier}/balance")
+    async def provider_balance(identifier: uuid.UUID, _user: Annotated[dict, Depends(administrator)]):
+        from .provider_balance import deepseek_balance
+        return await deepseek_balance(ai, identifier)
 
     @application.put("/api/v1/admin/ai/default")
     def default_provider(body: DefaultInput, _user: Annotated[dict, Depends(administrator)]):
@@ -202,6 +283,10 @@ def create_app(data_dir=None, policy=None, ai_transport=None, youzan_transport=N
     @application.put("/api/v1/admin/ai/prompt")
     def global_prompt(body: PromptInput, _user: Annotated[dict, Depends(administrator)]):
         return ai.set_prompt(body.prompt)
+
+    @application.put("/api/v1/admin/ai/advanced")
+    def advanced_settings(body: AdvancedInput, _user: Annotated[dict, Depends(administrator)]):
+        return ai.save_advanced(body)
 
     @application.get('/api/v1/admin/ai/tool-prompts')
     def tool_prompts(user: Annotated[dict, Depends(administrator)]):
@@ -270,6 +355,11 @@ def create_app(data_dir=None, policy=None, ai_transport=None, youzan_transport=N
     @application.post('/api/v1/chat/cancel')
     async def cancel_message(body: CancelChatInput, user: Annotated[dict, Depends(chat_user)]):
         return await ai.cancel(user, body.request_id)
+
+    @application.post('/api/v1/chat/answer')
+    async def answer_question(body: ClarificationInput, user: Annotated[dict, Depends(chat_user)]):
+        return ai.runs.answer(user, body.request_id, body.interaction_id,
+            [item.model_dump(exclude_none=True) for item in body.answers])
 
     @application.get('/api/v1/chat/runs/{identifier}')
     async def chat_progress(identifier: uuid.UUID, user: Annotated[dict, Depends(chat_user)]):

@@ -1,0 +1,3 @@
+关于 Galaxy AI：署名调整为 CEO 陈宇卓、Developer chiaki。
+新增 ERP 板块及“人员管理”子板块，提供后续人员档案与管理功能的页面入口。
+保留自动更新、SiriWave iOS9 等待动画和原有业务功能。

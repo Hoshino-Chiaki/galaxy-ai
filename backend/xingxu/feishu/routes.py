@@ -33,6 +33,10 @@ def create_router(service, identity, token):
     @router.get('')
     def settings(user: Annotated[dict, Depends(connection_user)]):return service.summary(user)
 
+    @router.get('/bot')
+    def bot_status(user: Annotated[dict, Depends(connection_user)]):
+        return service.bot.summary(user) if service.bot else {'status':'not_configured'}
+
     @router.put('/app')
     def save_app(body: AppInput, user: Annotated[dict, Depends(connection_user)]):return service.save_app(user, body)
 

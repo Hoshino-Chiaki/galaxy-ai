@@ -49,6 +49,20 @@ class Client:
 
 
 class BusinessReportTests(unittest.TestCase):
+    def test_crm_discovery_origin_does_not_block_fixed_report_gateway(self):
+        from galaxy_cli.youzan_http import YouzanClient
+        for origin in ('https://crm.youzan.com', 'https://www.youzan.com', 'https://store.youzan.com'):
+            credentials={**CREDENTIALS,'origin':origin}
+            with self.subTest(origin=origin), patch.object(report,'category_credentials',return_value=credentials), \
+                    patch.object(YouzanClient,'_json',return_value=copy.deepcopy(RESULT)) as upstream:
+                result=load_registry().invoke('youzan.business-report',ARGUMENTS)
+                self.assertEqual(result,RESULT)
+                self.assertEqual(credentials['origin'],origin)
+                upstream.assert_called_once()
+                target=urlsplit(upstream.call_args.args[0])
+                self.assertEqual(target.hostname,'gateway.youzan.com')
+                self.assertEqual(target.path,urlsplit(report.REPORT).path)
+
     def test_preparation_preserves_pages_and_includes_all_choices(self):
         client = Client(); client.department_pages = True
         result = report.options(client, report.normalize({'action': 'options'}))

@@ -3,14 +3,24 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { spawnSync } = require('child_process');
+const {createInteractiveSlider} = require('../backend/youzan/interactive-slider.cjs');
+const interactiveSlider = createInteractiveSlider();
 
 const args = process.argv.slice(2);
 // Server integration keeps the tested browser/slider flow below unchanged.
 // Credentials arrive through a private stdin pipe, never command-line arguments.
-const managed = args.length === 1 && args[0] === '--managed-stdin';
+const interactive = args.length === 1 && args[0] === '--managed-interactive';
+const managed = interactive || (args.length === 1 && args[0] === '--managed-stdin');
+function readInitialLine() {
+  const data = Buffer.alloc(16384);
+  for (let i = 0; i < data.length; i++) {
+    if (!fs.readSync(0, data, i, 1, null) || data[i] === 10) return data.subarray(0, i).toString();
+  }
+  process.exit(22);
+}
 let managedInput;
 if (managed) {
-  const source = fs.readFileSync(0, 'utf8');
+  const source = interactive ? readInitialLine() : fs.readFileSync(0, 'utf8');
   if (source.length > 16384) process.exit(22);
   try { managedInput = JSON.parse(source); } catch (_) { process.exit(22); }
   if (typeof managedInput.account !== 'string' || !managedInput.account.trim() ||
@@ -34,7 +44,23 @@ if (!managed && (args.some(arg => arg !== '--status') || args.length > 1)) {
 const statusOnly = args.includes('--status');
 
 const root = path.resolve(__dirname, '..');
-const privateDir = managed ? path.dirname(managedInput.profile) : path.join(__dirname, 'private');
+// Local accounts keep independent browser state. Preserve the legacy profile for its owner.
+function localPrivateDirectory() {
+  const legacy = path.join(__dirname, 'private');
+  const credentials = path.join(root, 'account_password.txt');
+  if (!fs.existsSync(credentials)) return legacy;
+  const selected = fs.readFileSync(credentials, 'utf8').replace(/^\uFEFF/, '').split(/\r?\n/)[0].trim();
+  if (!selected) return legacy;
+  try {
+    const state = JSON.parse(fs.readFileSync(path.join(legacy, 'youzan-human-browser-state.json'), 'utf8'));
+    const mobile = state.cookies?.find(c => c.name === 'mobile' &&
+      (c.domain === 'youzan.com' || c.domain?.endsWith('.youzan.com')));
+    if (mobile && decodeURIComponent(mobile.value) === selected) return legacy;
+  } catch (_) { /* Unknown legacy ownership must not reuse another account's profile. */ }
+  const accountKey = crypto.createHash('sha256').update(selected).digest('hex');
+  return path.join(legacy, 'accounts', accountKey);
+}
+const privateDir = managed ? path.dirname(managedInput.profile) : localPrivateDirectory();
 const profile = managed ? managedInput.profile : path.join(privateDir, 'youzan-human-browser-profile');
 const reportFile = path.join(__dirname, 'youzan-login-result.json');
 const runId = new Date().toISOString().replace(/[:.]/g, '-') + '-' + process.pid;
@@ -49,6 +75,11 @@ let context;
 let activePage;
 let stage = 'launch';
 const pendingObservations = new Set();
+let sdkProfile = null;
+let resolveSdkProfile;
+const sdkProfileReady = new Promise(resolve => { resolveSdkProfile = resolve; });
+const input = interactive ? require('node:readline').createInterface({input: process.stdin}) : null;
+const actions = input?.[Symbol.asyncIterator]();
 if (managed) process.once('SIGTERM', async () => {
   if (context) await context.close().catch(() => {});
   process.exit(143);
@@ -150,7 +181,26 @@ function legacyPassword(value) {
 }
 
 async function observe(response) {
+  if (interactive) await interactiveSlider.observe(response);
   const ep = endpoint(response.url());
+  if (ep.host === 'risk-dfp-service-v2.youzan.com' && ep.path === '/web3_8/profile.json') {
+    // Observe the page SDK's own JSONP response; never replay or fabricate its request.
+    const text = await response.text();
+    const start = text.indexOf('{'), end = text.lastIndexOf('}');
+    if (start < 0 || end < start) return;
+    let body;
+    try { body = JSON.parse(text.slice(start, end + 1)); } catch (_) { return; }
+    const xxid = body.result?.xxid;
+    if (response.status() === 200 && body.code === '000' &&
+        typeof xxid === 'string' && xxid.length > 0 && xxid.length <= 4096) {
+      secrets.add(xxid);
+      sdkProfile = { xxid, code: body.code };
+      resolveSdkProfile(sdkProfile);
+      log({ event: 'fingerprint_profile_received', http_status: response.status(),
+        code: body.code, xxid_present: true, xxid_length: xxid.length });
+    }
+    return;
+  }
   const relevant = ep.path.includes('/api/captcha/') ||
     ep.path === '/api/login/by-pass-with-tencent-image.json' ||
     ep.path.includes('/new/dfp/') || ep.path.endsWith('/risk-dfp-service-v2/fm.js');
@@ -191,15 +241,100 @@ async function browserPost(page, url, data, form = false) {
   }, { url, data, form });
 }
 
-async function finish(page, result) {
+async function verification(kind, details = {}) {
+  // The parent binds this prompt to the active account and authenticated session.
+  process.stdout.write(JSON.stringify({event: 'verification_input', kind, ...details}) + '\n');
+  const next = await actions.next();
+  if (next.done || next.value.length > 32768) throw new Error('verification_input_closed');
+  const action = JSON.parse(next.value);
+  if (action.kind !== kind) throw new Error('unexpected_verification_action');
+  return action;
+}
+
+function accountResponse(page, pathname, method, timeout = 30000) {
+  const pending = page.waitForResponse(response =>
+    new URL(response.url()).origin === 'https://account.youzan.com' &&
+    new URL(response.url()).pathname === pathname && response.request().method() === method, {timeout});
+  pending.catch(() => {});
+  return pending;
+}
+
+async function manualSlider(page) {
+  return interactiveSlider.perform({page, context, verification});
+}
+
+async function smsLogin(page) {
+  stage = 'native_sms_login';
+  // The native password-login handler opens its account verification dialog.
+  const dialog = page.locator('.captcha-dialog:visible');
+  await dialog.waitFor({state: 'visible', timeout: 10000});
+  const codeInput = dialog.getByPlaceholder('输入短信验证码', {exact: true});
+  await verification('send');
+  const send = accountResponse(page, '/api/captcha/sms/send.json', 'GET', 420000);
+  const slider = page.locator('#slideBlockRef:visible').first();
+  await dialog.locator('.js-get-identify-code').click();
+  const first = await Promise.race([
+    send.then(response => ({response})),
+    slider.waitFor({state: 'visible', timeout: 20000}).then(() => ({})),
+  ]);
+  if (!first.response) {
+    if (!await manualSlider(page)) {
+      report.result = 'human_verification_required';
+      return;
+    }
+  }
+  let sentTimer;
+  let sent;
+  try {
+    sent = await Promise.race([send, new Promise((_, reject) => {
+      sentTimer = setTimeout(() => reject(new Error('sms_send_timeout')), 15000);
+    })]);
+  } finally { clearTimeout(sentTimer); }
+  const sendResult = await sent.json();
+  if (sendResult.code !== 0 || sendResult.data?.success !== true) {
+    report.result = 'sms_send_failed';
+    return;
+  }
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const {code} = await verification('code', {rejected: attempt > 0});
+    if (typeof code !== 'string' || !/^[0-9]{6}$/.test(code)) throw new Error('invalid_verification_code');
+    secrets.add(code);
+    await codeInput.fill(code);
+    const submitted = accountResponse(page, '/api/register-and-login.json', 'POST');
+    await dialog.getByRole('button', {name: '确定', exact: true}).click();
+    const result = await (await submitted).json();
+    if (result.code === 0) {
+      await finish(page, result, {nativeNavigation: true});
+      return;
+    }
+  }
+  report.result = 'sms_code_rejected';
+}
+
+async function finish(page, result, {nativeNavigation = false} = {}) {
   report.login_code = result.code;
   report.login_message = message(result.msg || result.message);
+  if (result.code === 160210182 && interactive) {
+    await smsLogin(page);
+    return;
+  }
   if (result.code !== 0) {
     report.result = result.code === 160210182 ? 'sms_verification_required' : 'login_rejected';
     return;
   }
   stage = 'verify_logged_in_state';
-  await page.goto('https://account.youzan.com/login/fill', { waitUntil: 'domcontentloaded', timeout: 30000 });
+  let landed = false;
+  if (nativeNavigation) {
+    // The SMS dialog redirects on success. Give it time to land before starting our own navigation.
+    try {
+      await page.waitForURL(url => url.origin === 'https://www.youzan.com' && url.pathname.startsWith('/v4/'),
+        {waitUntil: 'domcontentloaded', timeout: 8000});
+      landed = true;
+    } catch (error) {
+      if (error.name !== 'TimeoutError') throw error;
+    }
+  }
+  if (!landed) await page.goto('https://account.youzan.com/login/fill', { waitUntil: 'domcontentloaded', timeout: 30000 });
   await saveAuthenticatedState(page, 'login_success_sid_saved');
 }
 
@@ -247,12 +382,22 @@ async function finish(page, result) {
     return;
   }
   if (!loadCredentials()) { report.result = 'credentials_missing'; return; }
-  // Let the site's own device-fingerprint initialization run. No fingerprint values are logged.
+  // Existing cookies alone do not prove that this page's SDK has finished initializing.
   stage = 'fingerprint_initialization';
+  let sdkTimer;
+  let fingerprint;
   try {
-    await page.waitForFunction(() => /(?:^|;\s*)yz_fp_hash=/.test(document.cookie) &&
-      /(?:^|;\s*)dfp=/.test(document.cookie), undefined, { timeout: 15000 });
-  } catch (_) {}
+    fingerprint = await Promise.race([sdkProfileReady, new Promise((_, reject) => {
+      sdkTimer = setTimeout(() => reject(new Error('fingerprint_sdk_response_timeout')), 25000);
+    })]);
+  } finally { clearTimeout(sdkTimer); }
+  await page.waitForFunction(expected =>
+    localStorage.getItem('0876303504F93E80') === expected &&
+    /(?:^|;\s*)yz_fp_hash=/.test(document.cookie) &&
+    /(?:^|;\s*)dfp=/.test(document.cookie), fingerprint.xxid, { timeout: 15000 });
+  report.fingerprint_sdk = { profile_response_observed: true, code: fingerprint.code,
+    xxid_present: true, xxid_length: fingerprint.xxid.length, local_storage_confirmed: true };
+  log({ event: 'fingerprint_sdk_ready', ...report.fingerprint_sdk });
   const beforeCookies = await context.cookies();
   report.cookie_names_before_login = [...new Set(beforeCookies.map(c => c.name))].sort();
   report.device_fingerprint_cookies_present = ['yz_fp_hash', 'dfp'].every(
@@ -304,6 +449,17 @@ async function finish(page, result) {
     report.slider_not_requested = true;
     report.password_submissions++;
     await finish(page, await next.json());
+    return;
+  }
+  if (interactive) {
+    stage = 'native_password_slider';
+    const submitted = accountResponse(page, '/api/login/by-pass-with-tencent-image.json', 'POST', 235000);
+    if (!await manualSlider(page)) {
+      report.result = 'human_verification_required';
+      return;
+    }
+    report.password_submissions++;
+    await finish(page, await (await submitted).json());
     return;
   }
   const challenge = (await next.json()).data.captchaObtainInfoResult;
@@ -361,7 +517,7 @@ async function finish(page, result) {
   report.error_hint = message(String(error.message).split('\n')[0]);
   report.failed_stage = stage;
 }).finally(async () => {
-  if (report.result === 'browser_or_adapter_error' && activePage) {
+  if (!interactive && report.result === 'browser_or_adapter_error' && activePage) {
     try {
       report.ui_text = message(await activePage.locator('body').innerText());
       report.input_status = await activePage.locator('input').evaluateAll(es => es.map(e => ({
@@ -375,6 +531,8 @@ async function finish(page, result) {
     await Promise.allSettled([...pendingObservations]);
     await context.close().catch(() => {});
   }
+  input?.close();
+  if (input) process.stdin.pause();
   report.finished_at = new Date().toISOString();
   if (!managed) {
     const history = path.join(__dirname, 'login-runs');

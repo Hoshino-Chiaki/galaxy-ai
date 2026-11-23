@@ -1,0 +1,290 @@
+{
+  "inventory_init": {
+    "formId": "",
+    "clientInfo": {
+      "GoodsStockListDataSource": {
+        "ConfigGUID": "43b8308_grid_0",
+        "PageSize": 18,
+        "ShowAll": false
+      },
+      "__ConfigGUID": "43b8308_0",
+      "__Params": {
+        "ctypeid": "",
+        "cfullname": "",
+        "showtimes": true,
+        "ktypeid": "",
+        "ptypeid": "",
+        "pricetypeid": "",
+        "stocktype": "0",
+        "FilterIndex": "0",
+        "btypeid": "",
+        "ptypebar": "",
+        "Showzero": false,
+        "isunique": false
+      },
+      "__Grids": [
+        "43b8308_grid_0"
+      ],
+      "__GridInfos": {
+        "43b8308_grid_0": {
+          "PermitGroupName": [
+            "ptype",
+            "btype",
+            null
+          ],
+          "NumberTypeNames": {
+            "numberFields": {
+              "qty": "qty",
+              "unit2qty": "qty",
+              "duqty": "qty",
+              "avgtotal": "price",
+              "total": "total",
+              "ckcbprice": "price",
+              "ckcbtotal": "total",
+              "wayqty": "qty",
+              "waytotal": "total",
+              "totalqty": "qty",
+              "totaltotal": "total",
+              "jcqty": "qty",
+              "retailprice": "price",
+              "retailtotal": "total"
+            },
+            "numberColumnTypeNames": [
+              "qty",
+              "price",
+              "total"
+            ]
+          },
+          "BaseInfoColumns": [
+            {
+              "ColumnName": "$ptype$ptypeid",
+              "TypeName": "ptype",
+              "DisplayFields": "pusercode,pfullname",
+              "DataField": "ptypeid",
+              "RootLayerIdLength": 0,
+              "DisplayCaptions": null,
+              "DisableFields": null,
+              "IsVisible": false,
+              "DesignVisible": false,
+              "DisplayIndex": 0,
+              "Index": 0,
+              "IsReadOnly": false,
+              "IsEnabled": false,
+              "AllowExpand": null,
+              "AllowHide": false,
+              "AllowAddColumn": false,
+              "OnlyExpandVisible": null
+            },
+            {
+              "ColumnName": "$btype$btypeid1",
+              "TypeName": "btype",
+              "DisplayFields": "bfullname",
+              "DataField": "btypeid1",
+              "RootLayerIdLength": 0,
+              "DisplayCaptions": "主供应商",
+              "DisableFields": null,
+              "IsVisible": false,
+              "DesignVisible": false,
+              "DisplayIndex": 0,
+              "Index": 0,
+              "IsReadOnly": false,
+              "IsEnabled": false,
+              "AllowExpand": null,
+              "AllowHide": false,
+              "AllowAddColumn": false,
+              "OnlyExpandVisible": null
+            }
+          ],
+          "defaultOrderField": null,
+          "isDistributing": false,
+          "distributingTypeName": "",
+          "ExpressionColumnInfo": {},
+          "State": null
+        }
+      },
+      "__FormGuid": "",
+      "__Tag": null,
+      "__Caches": {
+        "__CorrelativeActionConfig": 0,
+        "__SkinConfig": 0,
+        "__ReportLimitData": 0,
+        "__CustomReportConfig": 0,
+        "__BusinessData": 0,
+        "__SelfDataType": 0
+      }
+    }
+  },
+  "inventory_query": {
+    "ctypeid": "",
+    "cfullname": "",
+    "showtimes": true,
+    "ktypeid": "",
+    "ptypeid": "",
+    "pricetypeid": "",
+    "stocktype": "0",
+    "FilterIndex": "0",
+    "btypeid": "",
+    "ptypebar": "",
+    "Showzero": false,
+    "isunique": false,
+    "otypeParentId1": "1",
+    "otypeParentId2": "2",
+    "otypeParentId3": "3",
+    "otypeParentId4": "4",
+    "otypeParentId5": "5",
+    "otypeParentId6": "6",
+    "otypeParentId7": "7",
+    "otypeParentId8": "8",
+    "otypeParentId9": "10",
+    "otypeParentId10": "10",
+    "otypeParentId11": "11",
+    "otypeParentId12": "12",
+    "otypeParentId13": "13",
+    "otypeParentId14": "14",
+    "otypeParentId15": "15",
+    "otypeParentId16": "16",
+    "ishistory": 0
+  },
+  "organization_init": {
+    "formId": "",
+    "clientInfo": {
+      "typeds": {
+        "ConfigGUID": "300d9946_grid_6736392",
+        "PageSize": 14,
+        "ShowAll": false
+      },
+      "__ConfigGUID": "300d9946_0",
+      "__Params": {
+        "isvch": "0",
+        "typeflag": "C",
+        "singelmore": "M",
+        "filter": "",
+        "selecttype": "31",
+        "isquickquery": "1",
+        "clearcontrol": "mKtype"
+      },
+      "__Grids": [
+        "300d9946_grid_6736392"
+      ],
+      "__GridInfos": {
+        "300d9946_grid_6736392": {
+          "PermitGroupName": [
+            "ptype",
+            null
+          ],
+          "NumberTypeNames": {
+            "numberFields": {},
+            "numberColumnTypeNames": []
+          },
+          "BaseInfoColumns": [
+            {
+              "ColumnName": "$ptype$ptypeid",
+              "TypeName": "ptype",
+              "DisplayFields": "pusercode,pfullname",
+              "DataField": "ptypeid",
+              "RootLayerIdLength": 0,
+              "DisplayCaptions": null,
+              "DisableFields": null,
+              "IsVisible": false,
+              "DesignVisible": false,
+              "DisplayIndex": 0,
+              "Index": 0,
+              "IsReadOnly": false,
+              "IsEnabled": false,
+              "AllowExpand": null,
+              "AllowHide": false,
+              "AllowAddColumn": false,
+              "OnlyExpandVisible": null
+            }
+          ],
+          "defaultOrderField": null,
+          "isDistributing": false,
+          "distributingTypeName": "",
+          "ExpressionColumnInfo": {},
+          "State": null
+        }
+      },
+      "__FormGuid": "",
+      "__Tag": null,
+      "__Caches": {
+        "__CorrelativeActionConfig": 0,
+        "__SkinConfig": 0,
+        "__ReportLimitData": 0,
+        "__CustomReportConfig": 0,
+        "__BusinessData": 0,
+        "__SelfDataType": 0
+      }
+    }
+  },
+  "product_init": {
+    "formId": "",
+    "clientInfo": {
+      "typeds": {
+        "ConfigGUID": "300d9946_grid_8036392",
+        "PageSize": 14,
+        "ShowAll": false
+      },
+      "__ConfigGUID": "300d9946_0",
+      "__Params": {
+        "isvch": "0",
+        "typeflag": "P",
+        "singelmore": "M",
+        "filter": "",
+        "isquickquery": "1",
+        "selecttype": "7",
+        "p_limit": false
+      },
+      "__Grids": [
+        "300d9946_grid_8036392"
+      ],
+      "__GridInfos": {
+        "300d9946_grid_8036392": {
+          "PermitGroupName": [
+            "ptype",
+            null
+          ],
+          "NumberTypeNames": {
+            "numberFields": {},
+            "numberColumnTypeNames": []
+          },
+          "BaseInfoColumns": [
+            {
+              "ColumnName": "$ptype$ptypeid",
+              "TypeName": "ptype",
+              "DisplayFields": "pusercode,pfullname",
+              "DataField": "ptypeid",
+              "RootLayerIdLength": 0,
+              "DisplayCaptions": null,
+              "DisableFields": null,
+              "IsVisible": false,
+              "DesignVisible": false,
+              "DisplayIndex": 0,
+              "Index": 0,
+              "IsReadOnly": false,
+              "IsEnabled": false,
+              "AllowExpand": null,
+              "AllowHide": false,
+              "AllowAddColumn": false,
+              "OnlyExpandVisible": null
+            }
+          ],
+          "defaultOrderField": null,
+          "isDistributing": false,
+          "distributingTypeName": "",
+          "ExpressionColumnInfo": {},
+          "State": null
+        }
+      },
+      "__FormGuid": "",
+      "__Tag": null,
+      "__Caches": {
+        "__CorrelativeActionConfig": 0,
+        "__SkinConfig": 0,
+        "__ReportLimitData": 0,
+        "__CustomReportConfig": 0,
+        "__BusinessData": 0,
+        "__SelfDataType": 0
+      }
+    }
+  }
+}

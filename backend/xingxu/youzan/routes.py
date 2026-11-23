@@ -2,7 +2,7 @@
 from typing import Annotated
 from fastapi import APIRouter, Depends
 from ..auth import AuthFailure
-from .schemas import YouzanInput, RefreshInput, ShopInput, RenewalInput
+from .schemas import YouzanInput, RefreshInput, ShopInput, RenewalInput, VerificationInput
 
 
 def create_router(youzan, identity, token):
@@ -15,13 +15,18 @@ def create_router(youzan, identity, token):
 
 
     @router.get("")
-    def youzan_settings(user: Annotated[dict, Depends(youzan_administrator)]):
-        return youzan.summary(user)
+    def youzan_settings(user: Annotated[dict, Depends(youzan_administrator)],
+                        value: Annotated[str, Depends(token)]):
+        return youzan.summary(user, verification_token=value)
 
 
     @router.put("")
-    def save_youzan(body: YouzanInput, user: Annotated[dict, Depends(youzan_administrator)]):
-        return youzan.save(user, body)
+    async def save_youzan(body: YouzanInput, user: Annotated[dict, Depends(youzan_administrator)],
+                         value: Annotated[str, Depends(token)]):
+        result = youzan.save(user, body)
+        if body.prepare_login:
+            return await youzan.start(user, 'connect', value, interactive_verification=body.interactive_verification)
+        return result
 
 
     @router.get("/shops")
@@ -39,6 +44,11 @@ def create_router(youzan, identity, token):
                             value: Annotated[str, Depends(token)]):
         return await youzan.start(user, body.kind, value)
 
+
+    @router.post("/verification", status_code=202)
+    async def verify_youzan(body: VerificationInput, user: Annotated[dict, Depends(youzan_administrator)],
+                            value: Annotated[str, Depends(token)]):
+        return youzan.submit_verification(user, body, value)
 
     @router.post("/cancel")
     async def cancel_youzan(user: Annotated[dict, Depends(youzan_administrator)]):

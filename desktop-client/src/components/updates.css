@@ -1,0 +1,34 @@
+.about-galaxy { max-width: 780px; }
+.about-identity { display: flex; align-items: center; gap: 18px; margin-bottom: 35px; }
+.about-symbol { width: 62px; height: 62px; display: grid; place-items: center; border: 1px solid #414141; background: #242424; color: #dedede; border-radius: 18px; }
+.about-identity h1 { margin: 0 0 8px; color: #ededed; font-size: 28px; font-weight: 500; letter-spacing: -.7px; }
+.about-version { color: #a3a3a3; font-size: 12px; font-variant-numeric: tabular-nums; }
+.about-galaxy h2 { margin: 0 0 15px; font-size: 19px; font-weight: 450; line-height: 1.6; color: #e1e1e1; }
+.about-description { font-size: 13px; line-height: 1.95; color: #aaa; margin: 0; }
+.about-credits { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; padding: 25px 0; margin: 24px 0 0; border-top: 1px solid #333; }
+.about-credits > div { display: flex; flex-direction: column; gap: 9px; }
+.about-credits span { color: #a3a3a3; font-size: 12px; }.about-credits strong { font-size: 15px; color: #ddd; font-weight: 500; }
+.about-update { padding: 22px; border: 1px solid #393939; border-radius: 12px; background: #1e1e1e; display: flex; align-items: center; justify-content: space-between; gap: 18px; }
+.about-update h3, .about-release h3 { color: #dedede; font-size: 13px; font-weight: 500; margin: 0 0 8px; }
+.about-update p { color: #a3a3a3; font-size: 12px; line-height: 1.7; margin: 0; }
+.about-release { margin-top: 20px; padding: 20px 0; }.about-release p { white-space: pre-wrap; color: #b4b4b4; font-size: 12px; line-height: 1.9; }
+.about-footer { margin: 30px 0 0; color: #8e8e8e; font-size: 11px; }
+.release-notes{display:grid;gap:23px}.release-note-group h3{display:flex;align-items:center;gap:8px;font-size:12px;font-weight:550;color:#cdd8e7;margin:0 0 11px}.release-note-group h3>span{display:grid;place-items:center;width:23px;height:23px;border-radius:7px;background:#7498c322;color:#9ebadc}.release-note-group.added h3>span{background:#70b99c20;color:#a0d4bc}.release-note-group.fixed h3>span{background:#d5b27120;color:#ddc48f}.release-note-group ul{list-style:none;padding:0;margin:0;display:grid;gap:10px}.release-note-group li{display:flex;align-items:start;gap:9px;font-size:12px;line-height:1.9;color:#aab6c6;overflow-wrap:anywhere}.release-note-group li>svg{flex-shrink:0;margin-top:5px;color:#718096}.release-note-group li strong{color:#d8e2ef;font-weight:550}.about-release{padding:23px 0}.about-release>.release-notes{border:1px solid #35404d;border-radius:13px;background:#191e24;padding:20px;margin:15px 0 19px}.about-release>h3{color:#d4dfec}
+@media(max-width:800px){.about-update{flex-wrap:wrap}}
+.update-dialog{width:min(680px,calc(100vw - 32px));max-height:calc(100dvh - 32px);padding:26px;border:1px solid #3e4857;border-radius:20px;background:#1b1f25;color:#e4e4e4;box-shadow:0 30px 100px #0009;overflow:auto;scrollbar-width:thin}
+.update-dialog:focus{outline:none}
+.update-dialog::backdrop{background:#070a0ec2;backdrop-filter:blur(5px)}
+.update-progress{margin:0;padding:0}
+.update-progress progress{display:block;width:100%;height:7px;appearance:none;border:0;border-radius:6px;overflow:hidden;background:#364150}
+.update-progress progress::-webkit-progress-bar{background:#364150}
+.update-progress progress::-webkit-progress-value{background:linear-gradient(90deg,#779bc2,#b6d0eb);border-radius:6px}
+.update-transfer-details{display:flex;justify-content:space-between;gap:16px;margin-top:12px;color:#aab8c9;font-size:12px;font-variant-numeric:tabular-nums}
+.update-transfer-details strong{font-weight:550;color:#d1e4fa}
+.update-progress-state{margin:10px 0 0;font-size:12px;color:#aab8c9}
+.update-notes{margin:24px 0 0;padding:0;max-height:none;overflow:visible;white-space:normal}
+.update-notes .release-notes{gap:20px}
+.update-notes .release-note-group li{line-height:1.75}
+.update-dialog-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:22px}
+.update-dialog-actions button{min-height:37px;font-size:12px}
+.update-error{padding:12px 14px;margin:18px 0 0;background:#a657571a;border:1px solid #b26d6d38;border-radius:9px;color:#e1b6b6;font-size:12px;line-height:1.7}
+@media(max-height:650px){.update-dialog{padding:20px}.update-notes{margin-top:20px}.update-notes .release-notes{gap:16px}}

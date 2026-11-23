@@ -160,7 +160,7 @@ def test_file_size_type_and_incomplete_body_are_enforced_and_reservations_releas
 def test_quota_is_per_user_and_reserved_before_streaming(setup, monkeypatch):
     app, _, session, other, _ = setup
     service = app.state.ai.dispatcher.uploads
-    monkeypatch.setattr(upload_module, 'USER_QUOTA', 5)
+    monkeypatch.setattr(app.state.file_storage, 'settings', lambda: {'quota_mb': 5 / 1048576, 'quota_bytes': 5})
     _, first = invitation(setup)
     assert put(setup, first, b'abcd').status_code == 200
     _, second = invitation(setup)

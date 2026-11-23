@@ -20,8 +20,8 @@ from .file_scope import root_directory, child_directory, source_file, regular_fi
 from .registry import ToolError
 from .youzan_http import YouzanClient, NoRedirect
 
-NAMES = ('material-category', 'material-list', 'material-upload', 'product-get', 'product-options', 'product-update', 'product-search', 'product-group')
-ACTIONS = {'material-category': ('list', 'create', 'rename', 'move'),
+NAMES = ('material-category', 'material-list', 'material-upload', 'product-get', 'product-options', 'product-update', 'product-search', 'product-group', 'order-search')
+ACTIONS = {'order-search': ('options', 'query'), 'material-category': ('list', 'create', 'rename', 'move'),
     'product-options': ('groups', 'sku-values', 'detail-templates', 'delivery', 'shops'), 'product-update': ('preview', 'apply'), 'product-search': ('options','query'),
     'product-group': ('list', 'get', 'stores', 'create')}
 OUTPUT = {'type': 'object'}
@@ -47,6 +47,7 @@ def require(context, *permissions):
 
 
 def permissions(name, arguments):
+    if name == 'order-search': return {'youzan:order:read'}
     if name == 'material-category':
         return {'youzan:material:read', *({'youzan:material:category:create'} if arguments['action'] == 'create' else
             {'youzan:material:category:update'} if arguments['action'] in ('rename', 'move') else set())}

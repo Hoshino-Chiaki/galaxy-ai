@@ -11,11 +11,24 @@ from pathlib import Path
 
 
 class JsonRepository:
+    def __new__(cls, directory, name="auth", fields=("users", "sessions", "attempts")):
+        if Path(directory).resolve() == Path('/opt/galaxy-ai/backend/private'):
+            os.environ.setdefault('GALAXY_DATABASE_CONFIG', '/etc/galaxy-ai/database.json')
+        from .account_storage import enabled, PERSONAL, AccountRepository
+        if enabled(directory) and name in PERSONAL and not (name == 'feishu' and fields == ('apps',)):
+            if Path(directory).resolve() == Path('/opt/galaxy-ai/backend/private') and not (Path(directory) / 'accounts/.ready.json').is_file():
+                raise RuntimeError('Account file storage migration is not complete')
+            return AccountRepository(directory, name, fields)
+        if os.environ.get('GALAXY_DATABASE_CONFIG'):
+            from .mysql_store import MySQLRepository
+            return MySQLRepository(directory, name, fields)
+        return super().__new__(cls)
+
     def __init__(self, directory: Path, name="auth", fields=("users", "sessions", "attempts")):
         self.directory = Path(directory)
         self.directory.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.directory.chmod(0o700)
-        if name not in ("auth", "ai", "chats", "tool_audit", "youzan", "files", "tool-prompts", "feishu", "uploads"):
+        if name not in ("auth", "ai", "chats", "tool_audit", "youzan", "files", "tool-prompts", "feishu", "uploads", "guanjia"):
             raise ValueError("Unknown repository")
         self.fields = fields
         self.file = self.directory / f"{name}.json"

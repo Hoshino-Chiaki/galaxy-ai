@@ -1,6 +1,6 @@
 # Galaxy AI
 
-Galaxy AI 的桌面客户端、服务端、业务 CLI 和部署源码，便于跨电脑继续开发。当前客户端版本为 `0.7.6`。
+Galaxy AI 的桌面客户端、服务端、业务 CLI 和部署源码，便于跨电脑继续开发。当前客户端版本为 `0.8.22`。
 
 ## 目录
 
@@ -51,4 +51,6 @@ git push -u origin HEAD
 
 后端测试依赖见 `backend/requirements-dev.txt`，CLI 依赖见 `galaxy-cli/pyproject.toml`。单元测试使用临时数据目录；`verify-*-live.py` 等真实联调脚本需要另行提供私有测试配置及账号文件。
 
-这次源码整理的范围及与线上版本的差异见 [源码快照说明](designs/源码快照-20261116.md)。
+当前源码包含部门与个人权限、任务调度、微信和飞书入口、管家婆账套选择、AI 用量统计及聊天附件存储。版本说明位于 [deploy/release-notes/](deploy/release-notes/)。
+
+历史源码整理说明见 [源码快照说明](designs/源码快照-20261116.md)。

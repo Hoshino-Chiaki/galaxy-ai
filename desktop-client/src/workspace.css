@@ -57,7 +57,7 @@
 .welcome p { margin: 0; font-size: 12px; color: #939393; letter-spacing: .5px; }
 .chat-composer { position: relative; isolation: isolate; border: 1px solid #343434; border-radius: 16px; padding: 12px 14px 10px; background: #202020; box-shadow: 0 8px 34px #00000014; transition: border-color .2s, box-shadow .2s; }
 .chat-composer:focus-within { border-color: #777777; box-shadow: 0 0 0 3px #aaaaaa06, 0 12px 48px #0000001a; }
-.chat-composer.is-busy { border-color: transparent; box-shadow: 0 0 18px #b4b1ee0c; }
+.chat-composer.is-busy { border-color: #3a3a3a; box-shadow: none; }
 .chat-composer > textarea, .chat-composer > .composer-toolbar { position: relative; z-index: 1; }
 .chat-composer textarea { display: block; width: 100%; min-height: 28px; max-height: 144px; padding: 0 4px; margin: 0; background: transparent; color: #dfdfdf; font: inherit; font-size: 14px; line-height: 1.7; border: 0; resize: none; outline: none !important; scrollbar-width: thin; }
 .chat-composer textarea::placeholder { color: #8b8b8b; font-size: 13px; }
@@ -117,30 +117,18 @@
 .chat-message.user .message-text { padding: 11px 16px; background: #262626; border: 1px solid #373737; border-radius: 13px 3px 13px 13px; }
 .conversation-composer { flex-shrink: 0; max-width: 774px; width: 100%; padding: 0 42px 10px; margin: 0 auto; }
 .pending-reply .message-body { flex: 1; }
-.pending-status-card { width: 100%; max-width: 580px; padding: 18px 19px 12px; border: 1px solid #383b3b; border-radius: 13px; background: linear-gradient(130deg, #252a29c9, #202122 75%); }
-.pending-status-top { display: flex; align-items: flex-start; gap: 12px; }
-.pending-phase-symbol { position: relative; flex: 0 0 38px; height: 38px; display: grid; place-items: center; border-radius: 12px; color: #b9d5ca; background: #b9d5ca0c; }
-.pending-phase-symbol::after { content: ''; position: absolute; inset: 0; border-radius: inherit; border: 1px solid #b9d5ca20; border-top-color: #bdd8cc98; animation: pending-orbit 2.8s linear infinite; }
-.pending-phase-copy { flex: 1; min-width: 0; padding-top: 1px; }
-.pending-phase-title { color: #d9e4de; font-size: 12px; font-weight: 500; line-height: 1.6; }
-.pending-phase-copy p { color: #8e9993; font-size: 10px; line-height: 1.8; margin: 5px 0 0; }
-.pending-clock { min-width: 68px; text-align: right; padding-left: 8px; }
-.pending-clock > span { display: block; color: #83938b; font-size: 9px; line-height: 1.5; margin-bottom: 3px; }
-.pending-clock time { color: #dce8df; font-family: 'Segoe UI', sans-serif; font-size: 21px; font-weight: 300; letter-spacing: .7px; font-variant-numeric: tabular-nums; }
-.pending-activity-track { height: 2px; margin: 18px 0 12px; border-radius: 2px; background: #b9d5ca10; overflow: hidden; }
-.pending-activity-track i { display: block; width: 36%; height: 100%; background: linear-gradient(90deg, transparent, #b4d0c5b3, transparent); animation: pending-sweep 2.6s ease-in-out infinite; }
-.pending-status-footer { min-height: 17px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; color: #849189; font-size: 9px; line-height: 1.7; }
-.pending-status-footer > span { display: inline-flex; align-items: center; gap: 5px; }
-.pending-status-footer time { font-variant-numeric: tabular-nums; }
-.pending-stop-hint { margin-left: auto; color: #707b75; }
-.pending-status-card[data-phase='stopping'], .pending-status-card[data-phase='waiting'] { border-color: #41403c; background: linear-gradient(130deg, #292825, #222222); }
-.pending-status-card[data-phase='stopping'] .pending-activity-track i { opacity: .45; }
+/* SiriWave iOS9: a compact voice waveform, with no surrounding status card. */
+.reply-wave { position: relative; width: 200px; max-width: 100%; height: 40px; }
+.reply-wave-canvas { width: 100%; height: 100%; }
+.reply-wave-canvas canvas { display: block; }
+.reply-wave-static { display: none; position: absolute; top: 50%; left: 10%; width: 80%; height: 2px; border-radius: 2px; background: linear-gradient(90deg, transparent, #8babed, #c59be7, #ee8aa1, #88d3c5, transparent); }
+.reply-wave[data-stopping="true"] .reply-wave-canvas { visibility: hidden; }
+.reply-wave[data-stopping="true"] .reply-wave-static { display: block; opacity: .6; }
 .message-duration { margin-left: 9px; color: #68766d; font-size: 9px; font-variant-numeric: tabular-nums; }
 .process-duration { color: #75877b; font-size: 10px; font-variant-numeric: tabular-nums; }
-@keyframes pending-sweep { 0% { transform: translateX(-105%); } 100% { transform: translateX(385%); } }
-@keyframes pending-orbit { to { transform: rotate(360deg); } }
-@media (prefers-reduced-motion: reduce) { .pending-phase-symbol::after, .pending-activity-track i { animation: none; } .pending-activity-track i { width: 100%; opacity: .5; } }
-@media (max-width: 700px) { .pending-status-card { padding: 14px 13px 10px; } .pending-status-top { gap: 9px; } .pending-phase-symbol { flex-basis: 32px; height: 32px; } .pending-clock { min-width: 62px; } .pending-status-footer { gap: 7px; } .pending-stop-hint { margin-left: 0; } .process-duration { display: none; } }
+.history-open:disabled { cursor: wait; opacity: .65; }
+.conversation-loading { min-height: 280px; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:10px; color:#a9a9a9; font-size:12px; }
+.conversation-loading small { color:#777; font-size:10px; }
 .workspace-page ::selection { background: #ffffff26; color: #fff; }
 @keyframes history-enter { from { opacity: 0; transform: translateX(9px); } to { opacity: 1; transform: translateX(0); } }
 @media (max-width: 900px) { .workspace-sidebar { width: 186px; padding-left: 12px; padding-right: 12px; } .chat-content { padding-left: 31px; padding-right: 31px; } .chat-header { padding-left: 26px; padding-right: 26px; } }
@@ -193,3 +181,4 @@
 .send-message.stop-message { background: #dededc; color: #242424; }
 .send-message.stop-message:hover:not(:disabled) { background: #fff; }
 .tool-event.cancelled .tool-event-status { color: #a9a9a3; }
+.composer-add-file{display:flex;align-items:center;justify-content:center;flex-shrink:0;width:29px;height:29px;border:1px solid #41484e;border-radius:8px;background:transparent;color:#bdc5ce;cursor:pointer;transition:background .15s,border-color .15s}.composer-add-file:hover{background:#ffffff0c;border-color:#7a9cab;color:#e8f5fb}.composer-add-file:disabled{opacity:.4;cursor:default}.composer-attachments,.message-attachments{display:flex;flex-wrap:wrap;gap:9px}.composer-attachments{padding:0 3px 12px;max-height:222px;overflow:auto}.message-attachments{margin-top:11px}.chat-attachment{display:flex;align-items:center;gap:9px;width:226px;max-width:100%;min-width:0;padding:9px;border:1px solid #3b464e;border-radius:11px;background:#242c31;color:#c4d0da}.chat-attachment-icon{display:flex;align-items:center;justify-content:center;flex-shrink:0;width:39px;height:39px;border-radius:7px;background:#34424c;color:#9ec5df;overflow:hidden}.chat-attachment-icon img{width:100%;height:100%;object-fit:cover}.chat-attachment-info{flex:1;min-width:0}.chat-attachment-info strong{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;font-weight:500}.chat-attachment-info small{display:block;color:#91a2b0;font-size:10px;margin-top:5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.chat-attachment button,.composer-uploading button{display:flex;align-items:center;justify-content:center;flex-shrink:0;border:0;border-radius:6px;padding:5px;background:transparent;color:#90a1ad;cursor:pointer}.chat-attachment button:hover,.composer-uploading button:hover{background:#ffffff10;color:#e1eaf0}.chat-attachment button:disabled{opacity:.4}.composer-uploading{display:flex;align-items:center;gap:9px;font-size:11px;color:#a9c9db;padding:0 4px 12px}.composer-uploading span{max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.composer-uploading progress{width:110px;max-width:22%;height:4px;accent-color:#93ccdc}.composer-uploading small{color:#8e9da8}
