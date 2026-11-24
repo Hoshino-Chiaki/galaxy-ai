@@ -16,10 +16,13 @@ from ..account_storage import scoped
 from ..store import JsonRepository
 from .captcha import Captchas
 
-ORIGIN = 'https://gyl.scm121.com'
+ORIGIN = 'https://account.scm121.com'
 KEY = ORIGIN + '/api/auth/open/getEncryptKey'
 LOGIN = ORIGIN + '/api/auth/open/v2/login/gyl/accountLogin'
 CAPTCHA = ORIGIN + '/api/auth/open/v2/login/getCheckCode'
+LOGIN_HEADERS = {'Content-Type': 'application/json', 'Accept': 'application/json',
+                 'Origin': ORIGIN, 'Referer': ORIGIN + '/user/login',
+                 'appcode': 'account.scm121.com', 'Source': 'ACCOUNT'}
 
 
 def owner(user):
@@ -85,7 +88,7 @@ class JushuitanService:
                 # Each new image starts with an empty cookie jar. Only this
                 # challenge's cookies can accompany its human-entered answer.
                 async with httpx.AsyncClient(transport=self.transport, trust_env=False, follow_redirects=False,
-                        timeout=30, headers={'appcode': 'gyl.scm121.com', 'Origin': ORIGIN, 'Referer': ORIGIN + '/user/login'}) as client:
+                        timeout=30, headers=LOGIN_HEADERS) as client:
                     response = await client.get(CAPTCHA, params={'loginName': account})
                     response.raise_for_status()
                     data = self.check(response.json(), secrets=(account,))
@@ -96,10 +99,9 @@ class JushuitanService:
                 raise AuthFailure('jushuitan_invalid_response', '聚水潭验证码图片无效，请点击刷新重试。', 502) from None
 
     async def login(self, account, password, *, verification=None):
-        headers = {'Content-Type': 'application/json', 'Origin': ORIGIN, 'Referer': ORIGIN + '/user/login', 'appcode': 'gyl.scm121.com'}
         try:
             async with httpx.AsyncClient(transport=self.transport, trust_env=False, follow_redirects=False, timeout=30,
-                    headers=headers, cookies=verification['cookies'] if verification else None) as client:
+                    headers=LOGIN_HEADERS, cookies=verification['cookies'] if verification else None) as client:
                 response = await client.post(KEY, params={'username': account})
                 response.raise_for_status()
                 key = self.check(response.json(), secrets=(account, password))
@@ -108,7 +110,7 @@ class JushuitanService:
                 padder = padding.PKCS7(128).padder()
                 encryptor = Cipher(algorithms.AES(key.encode()), modes.ECB()).encryptor()
                 encoded = (encryptor.update(padder.update(password.encode()) + padder.finalize()) + encryptor.finalize()).hex()
-                body = {'loginName': account, 'password': encoded}
+                body = {'loginName': account, 'password': encoded, 'fromBu': 'jst-gyl-pc'}
                 if verification:
                     body.update(preToken=verification['pre_token'], verifyCode=verification['verify_code'])
                 response = await client.post(LOGIN, json=body)

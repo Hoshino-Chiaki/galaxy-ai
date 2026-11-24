@@ -17,6 +17,8 @@ GIF = base64.b64encode(b'GIF89a' + b'fixture-image').decode()
 
 
 def upstream(request):
+    assert request.url.host == 'account.scm121.com'
+    assert request.headers['source'] == 'ACCOUNT'
     if request.url.path == httpx.URL(CAPTCHA).path:
         assert request.method == 'GET' and request.url.params['loginName'] == 'own-account'
         return httpx.Response(200, headers={'Set-Cookie': 'challenge_cookie=fixture; Secure; Path=/'},
@@ -25,6 +27,7 @@ def upstream(request):
         return httpx.Response(200, json={'success': True, 'code': '0000', 'data': '0123456789abcdef'})
     assert request.url.path == httpx.URL(LOGIN).path
     body = json.loads(request.content)
+    assert body['fromBu'] == 'jst-gyl-pc'
     if 'verifyCode' not in body:
         return httpx.Response(200, json={'success': False, 'code': '20001', 'message': '图形验证码不能为空！'})
     assert body['verifyCode'] == 'fixture123'

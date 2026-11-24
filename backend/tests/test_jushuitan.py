@@ -25,11 +25,18 @@ def test_login_uses_platform_key_and_retains_only_encrypted_personal_state(setup
     requests = []
     def upstream(request):
         requests.append(request)
+        assert request.url.host == 'account.scm121.com'
+        assert request.headers['appcode'] == 'account.scm121.com'
+        assert request.headers['source'] == 'ACCOUNT'
+        assert request.headers['origin'] == 'https://account.scm121.com'
+        assert request.headers['referer'] == 'https://account.scm121.com/user/login'
+        assert 'authorization' not in request.headers and 'gwfp' not in request.headers
         if str(request.url).startswith(KEY):
             assert request.url.params['username'] == 'own-account'
             return httpx.Response(200, json={'success': True, 'code': '0000', 'data': '0123456789abcdef'})
         assert str(request.url) == LOGIN
         body = json.loads(request.content)
+        assert body['fromBu'] == 'jst-gyl-pc'
         decryptor = Cipher(algorithms.AES(b'0123456789abcdef'), modes.ECB()).decryptor()
         clear = decryptor.update(bytes.fromhex(body['password'])) + decryptor.finalize()
         unpadder = padding.PKCS7(128).unpadder()
@@ -44,6 +51,29 @@ def test_login_uses_platform_key_and_retains_only_encrypted_personal_state(setup
     other = client.get('/api/v1/jushuitan', headers=admin).json()
     assert other['account'] == '' and not other['connected']
     assert all(secret not in service.repo.file.read_text() for secret in (SESSION['access_token'], SESSION['refresh_token'], 'fixture-password'))
+
+
+def test_each_account_center_login_starts_with_empty_cookies_and_only_uses_new_server_cookie(setup):
+    app, _, _, _, _ = setup
+    requests = []
+    key_count = 0
+    def upstream(request):
+        nonlocal key_count
+        requests.append(request)
+        if request.url.path == '/api/auth/open/getEncryptKey':
+            assert 'cookie' not in request.headers
+            key_count += 1
+            return httpx.Response(200, headers={'Set-Cookie': f'acw_tc=new-{key_count}; Secure; Path=/'},
+                json={'success': True, 'code': '0000', 'data': '0123456789abcdef'})
+        assert request.headers['cookie'] == f'acw_tc=new-{key_count}'
+        assert set(json.loads(request.content)) == {'loginName', 'password', 'fromBu'}
+        return httpx.Response(200, json={'success': True, 'code': '0000', 'data': SESSION})
+    service = app.state.jushuitan
+    service.transport = httpx.MockTransport(upstream)
+    async def scenario():
+        for _ in range(2):assert (await service.login('own-account', 'fixture-password'))['access_token']
+    asyncio.run(scenario())
+    assert len(requests) == 4 and key_count == 2
 
 
 def test_null_password_is_truly_empty_omission_reuses_saved_and_failure_preserves_session(setup):
