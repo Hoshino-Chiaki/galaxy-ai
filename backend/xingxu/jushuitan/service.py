@@ -14,10 +14,12 @@ from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from ..auth import AuthFailure
 from ..account_storage import scoped
 from ..store import JsonRepository
+from .captcha import Captchas
 
 ORIGIN = 'https://gyl.scm121.com'
 KEY = ORIGIN + '/api/auth/open/getEncryptKey'
 LOGIN = ORIGIN + '/api/auth/open/v2/login/gyl/accountLogin'
+CAPTCHA = ORIGIN + '/api/auth/open/v2/login/getCheckCode'
 
 
 def owner(user):
@@ -31,6 +33,7 @@ class JushuitanService:
         self.login_runner = login_runner or self.login
         self.locks = {}
         self.slots = asyncio.Semaphore(2)
+        self.captchas = Captchas()
 
     def operation_guard(self, user):
         return self.locks.setdefault(owner(user), asyncio.Lock())
@@ -66,15 +69,37 @@ class JushuitanService:
             reason = f'（业务码 {code}）' + (f' 平台提示：{detail}' if detail else '')
             if re.search(r'用户名或密码|账号或密码|帐号或密码', detail):
                 raise AuthFailure('jushuitan_login_failed', '聚水潭账号或密码不正确，原有登录会话已保留。' + reason, 400)
+            if code == '20001' and re.search(r'图形|验证码', detail):
+                raise AuthFailure('jushuitan_captcha_required', '请填写图形验证码后再次登录，原会话未覆盖。' + reason, 409)
             if code in ('20001', '20002', '1007', '3333'):
                 raise AuthFailure('jushuitan_verification_required', '聚水潭要求额外安全验证，请在官方网页确认账号状态；原会话未覆盖。' + reason, 409)
             raise AuthFailure('jushuitan_login_failed', '聚水潭未接受本次登录，原会话未覆盖。' + reason, 400)
         return value.get('data')
 
-    async def login(self, account, password):
+    async def captcha(self, user, account):
+        lock = self.operation_guard(user)
+        if lock.locked():raise AuthFailure('jushuitan_busy', '聚水潭正在处理当前账号的请求，请稍后再试。', 409)
+        async with lock, self.slots:
+            self.captchas.discard(owner(user))
+            try:
+                # Each new image starts with an empty cookie jar. Only this
+                # challenge's cookies can accompany its human-entered answer.
+                async with httpx.AsyncClient(transport=self.transport, trust_env=False, follow_redirects=False,
+                        timeout=30, headers={'appcode': 'gyl.scm121.com', 'Origin': ORIGIN, 'Referer': ORIGIN + '/user/login'}) as client:
+                    response = await client.get(CAPTCHA, params={'loginName': account})
+                    response.raise_for_status()
+                    data = self.check(response.json(), secrets=(account,))
+                    return self.captchas.issue(owner(user), account, data, httpx.Cookies(client.cookies))
+            except httpx.HTTPError:
+                raise AuthFailure('jushuitan_unavailable', '无法获取聚水潭验证码，请点击刷新重试。', 502) from None
+            except ValueError:
+                raise AuthFailure('jushuitan_invalid_response', '聚水潭验证码图片无效，请点击刷新重试。', 502) from None
+
+    async def login(self, account, password, *, verification=None):
         headers = {'Content-Type': 'application/json', 'Origin': ORIGIN, 'Referer': ORIGIN + '/user/login', 'appcode': 'gyl.scm121.com'}
         try:
-            async with httpx.AsyncClient(transport=self.transport, trust_env=False, follow_redirects=False, timeout=30, headers=headers) as client:
+            async with httpx.AsyncClient(transport=self.transport, trust_env=False, follow_redirects=False, timeout=30,
+                    headers=headers, cookies=verification['cookies'] if verification else None) as client:
                 response = await client.post(KEY, params={'username': account})
                 response.raise_for_status()
                 key = self.check(response.json(), secrets=(account, password))
@@ -83,7 +108,10 @@ class JushuitanService:
                 padder = padding.PKCS7(128).padder()
                 encryptor = Cipher(algorithms.AES(key.encode()), modes.ECB()).encryptor()
                 encoded = (encryptor.update(padder.update(password.encode()) + padder.finalize()) + encryptor.finalize()).hex()
-                response = await client.post(LOGIN, json={'loginName': account, 'password': encoded})
+                body = {'loginName': account, 'password': encoded}
+                if verification:
+                    body.update(preToken=verification['pre_token'], verifyCode=verification['verify_code'])
+                response = await client.post(LOGIN, json=body)
                 response.raise_for_status()
                 result = self.check(response.json(), secrets=(account, password, encoded))
         except httpx.HTTPError:
@@ -95,14 +123,20 @@ class JushuitanService:
             raise AuthFailure('jushuitan_invalid_response', '聚水潭没有签发完整的身份和访问凭证，原会话未覆盖。', 502)
         return result
 
-    async def connect(self, user, account, password):
+    async def connect(self, user, account, password, *, challenge_id=None, verify_code=None):
         lock = self.operation_guard(user)
         if lock.locked():raise AuthFailure('jushuitan_busy', '聚水潭正在处理当前账号的请求，请稍后再试。', 409)
         async with lock, self.slots:
+            verification = None
+            if challenge_id is not None:
+                verification = self.captchas.consume(owner(user), account, challenge_id)
+                verification['verify_code'] = verify_code
+            else:
+                self.captchas.discard(owner(user))
             old = self.record(user)
             if password is None:
                 password = self.decrypt(old['password']) if old.get('account') == account and old.get('password') else ''
-            result = await self.login_runner(account, password)
+            result = await self.login_runner(account, password, **({'verification': verification} if verification else {}))
             identity = {key: result.get(key) for key in ('uid', 'coId', 'user_name')}
             expires = result.get('expires_in')
             expires_at = int(time.time()) + expires if type(expires) is int and expires > 0 else None

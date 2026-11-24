@@ -1,0 +1,8 @@
+.jushuitan-captcha { margin-top: 20px; padding: 16px; border: 1px solid #383838; border-radius: 12px; background: #191919; }
+.jushuitan-captcha-controls { display: flex; align-items: flex-end; flex-wrap: wrap; gap: 12px; }
+.jushuitan-captcha-controls .console-field { flex: 1; min-width: 140px; }
+.jushuitan-captcha-image { flex: 0 0 150px; height: 48px; padding: 3px; background: #fff; border: 1px solid #494949; border-radius: 8px; cursor: pointer; overflow: hidden; }
+.jushuitan-captcha-image img { display: block; width: 100%; height: 100%; object-fit: contain; }
+.jushuitan-captcha-refresh { display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-height: 40px; }
+.jushuitan-captcha p { margin: 12px 0 0; color: #b9bdc4; font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+.jushuitan-captcha button:disabled { cursor: default; opacity: .55; }

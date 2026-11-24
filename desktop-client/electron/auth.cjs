@@ -201,6 +201,7 @@ const routes = {
   'guanjia.settings': () => ['GET', '/api/v1/guanjia'],
   'jushuitan.settings': () => ['GET', '/api/v1/jushuitan'],
   'jushuitan.login': value => ['POST', '/api/v1/jushuitan/login', value],
+  'jushuitan.captcha': value => ['POST', '/api/v1/jushuitan/captcha', value],
   'guanjia.databases': () => ['GET', '/api/v1/guanjia/databases'],
   'guanjia.login': value => ['POST', '/api/v1/guanjia/login', value],
   'profile.get': () => ['GET', '/api/v1/me/profile'],
@@ -310,7 +311,7 @@ async function api(action, value, notify = () => {}) {
       return { ok: true, data: { saved: true, filename } }
     }
     const [method, route, body] = routes[action](value)
-    const data = await request(method, route, body, captured, action === 'chat.send' ? 0 : action === 'guanjia.databases' ? 40000 : action === 'guanjia.login' ? 120000 : action === 'admin.testProvider' ? 140000 : 15000)
+    const data = await request(method, route, body, captured, action === 'chat.send' ? 0 : action === 'guanjia.databases' ? 40000 : action === 'guanjia.login' ? 120000 : action === 'jushuitan.login' ? 100000 : action === 'jushuitan.captcha' ? 35000 : action === 'admin.testProvider' ? 140000 : 15000)
     if (token !== captured) throw new Error('账号已切换，请重新操作。')
     if (action === 'chat.status' && Number.isFinite(data?.history_response_mb)) {
       responseLimits.historyResponseBytes = Math.max(2, Math.min(64, data.history_response_mb)) * 1024 * 1024

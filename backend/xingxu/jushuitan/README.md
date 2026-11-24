@@ -8,3 +8,4 @@
 - 生产连接保存在 `accounts/<账号>/channels/jushuitan/connection.json`，凭证由服务器密钥加密。查询结果走统一缓存，完整 JSON 位于 `accounts/<账号>/cache/jushuitan/order-search/`。
 - 权限 `jushuitan:order:read` 控制目录可见和每次调用；配置权限由实际渠道能力派生，不将平台角色转换成 Galaxy 管理员权限。
 - 工具源码与输入输出说明：`galaxy-cli/src/galaxy_cli/tools/jushuitan/order_search.py`。计数请求 searchType=2，明细请求 searchType=1；完整响应分别保留在 count 和 query，列表 total=-1 不能当零订单。
+- 平台要求图形验证码时，登录响应返回 `captcha_required` 和图片；员工填写后提交 `challenge_id`、`verify_code`。刷新接口 `POST /api/v1/jushuitan/captcha` 只接收账号。平台 preToken 和当次 Cookie 只存在服务端内存，绑定员工、渠道账号，五分钟过期、提交即消费；刷新会使旧图失效，不保存或自动识别答案。
