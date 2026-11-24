@@ -38,23 +38,36 @@ class AccountInfo:
                 value = provider.summary(user)
                 if name == 'youzan':
                     sid = value.get('sid', {})
-                    status = ('not_configured' if not value['configured'] else 'login_required' if not sid.get('present')
-                        else 'expired' if sid.get('expired') else 'connected' if value.get('csrf', {}).get('present') else 'partial')
+                    # Match the channel page. Cached expiry is not a live rejection.
+                    sessions = value.get('shop_sessions') or []
+                    ready = sum(bool(shop.get('ready')) for shop in sessions)
+                    status = ('not_configured' if not value['configured'] else 'connected' if ready
+                        else 'not_connected' if not sid.get('present') else 'unknown' if sid.get('expired')
+                        else 'connected' if value.get('csrf', {}).get('present') else 'partial')
                     info = {'account': value.get('account', ''), 'status': status}
+                    if sessions:
+                        info.update(ready_shops=ready, total_shops=len(sessions))
                 elif name == 'feishu':
-                    expired = value.get('expires_at') and value['expires_at'] <= now
-                    refreshable = value.get('refresh_expires_at') and value['refresh_expires_at'] > now
                     info = {'account': (value.get('identity') or {}).get('name', ''),
                         'status': 'not_configured' if not value['configured'] else 'not_connected' if not value['connected']
-                            else 'refreshable' if expired and refreshable else 'expired' if expired else 'connected'}
+                            else 'connected'}
                 elif name == 'guanjia':
-                    info = {'account': value.get('account', ''), 'status': 'credentials_saved' if value['connected'] else 'not_connected'}
+                    info = {'account': value.get('account', ''), 'status': 'connected' if value['connected'] else 'not_connected'}
                 elif name == 'clawbot':
                     info = {'account': value.get('bot_id', ''), 'status': value.get('status', 'disconnected')}
                 else:
                     info = {'account': '', 'status': 'unknown'}
+                info.update(source='channel_settings', checked_live=False)
+                info['status_label'] = {
+                    'connected': '已连接，与客户端渠道状态一致',
+                    'partial': '已登录，部分店铺会话尚未就绪，不等于账号过期',
+                    'unknown': '已保存登录会话，缓存到期信息不能确认当前失效，状态待确认',
+                    'not_connected': '未取得连接', 'not_configured': '未配置',
+                }.get(info['status'], info['status'])
+                info['message'] = '本次读取与客户端相同的渠道状态，未实时调用业务接口。不要根据缓存时间或部分店铺未就绪声称整个渠道已过期，也不要据此要求重新登录。'
                 channels[name] = info
             except AuthFailure:
-                channels[name] = {'account': '', 'status': 'unavailable'}
+                channels[name] = {'account': '', 'status': 'unavailable', 'checked_live': False,
+                    'status_label': '暂时无法读取状态', 'message': '读取状态失败不代表渠道登录过期，不能据此要求重新登录。'}
         return {'name': user.get('name') or user['username'], 'account': user['username'],
             'administrator': user['role'] == 'admin', 'channels': channels, 'checked_at': int(now)}

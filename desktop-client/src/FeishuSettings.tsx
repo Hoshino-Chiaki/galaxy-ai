@@ -96,11 +96,11 @@ export default function FeishuSettings({ user, mode = 'personal' }: { user: Curr
         </div></div>
       </section>}
       {config.bot && <section className="youzan-account-card feishu-bot-card">
-        <div className="youzan-section-title"><span className="provider-symbol"><MessageCircle size={18} /></span><div><h2>Galaxy AI · 飞书机器人</h2><p>{mode === 'application' ? '机器人直接连接服务器上的 Galaxy AI，复用现有模型和工具。' : '私聊机器人，使用你自己的 Galaxy 权限与渠道账号。'}</p></div></div>
+        <div className="youzan-section-title"><span className="provider-symbol"><MessageCircle size={18} /></span><div><h2>Galaxy AI · 飞书机器人</h2><p>{mode === 'application' ? '机器人直接连接服务器上的 Galaxy AI，复用现有模型和工具。' : '私聊或群内 @ 机器人，使用你自己的 Galaxy 权限与渠道账号。'}</p></div></div>
         <div className="feishu-bot-status"><span className={'console-status ' + (config.bot.status === 'connected' ? 'ready' : '')}><span className="status-dot" />{{connected:'长连接已建立',starting:'正在连接',reconnecting:'正在重连',error:'连接异常',not_configured:'请先配置企业应用'}[config.bot.status] || '等待连接'}</span>{mode === 'personal' && <span>{!config.bot.allowed ? '当前未开通机器人对话权限' : config.bot.identity_bound ? '已关联本人的 Galaxy 账号' : '请先连接本人的飞书账号'}</span>}</div>
         {config.bot.error && <p className="console-error" role="status">{config.bot.error}</p>}
-        {mode === 'application' && <><p className="console-section-description">飞书开放平台 → 当前应用 → 事件与回调，选择“使用长连接接收事件”，添加“接收消息”事件（im.message.receive_v1）。开通下方机器人权限并发布生效后，即可私聊机器人。</p><button type="button" className="console-ghost" onClick={() => { void copyText(JSON.stringify({scopes:{tenant:config.bot!.required_scopes}}, null, 2)).then(() => setNotice('机器人权限 JSON 已复制。')).catch(() => setError('复制失败，请重试。')) }}>复制机器人权限 JSON</button></>}
-        {mode === 'personal' && <p className="console-section-description">机器人会按飞书授权身份识别本人。可提问“查看我的账号信息”；该入口目前支持文字私聊。</p>}
+        {mode === 'application' && <><p className="console-section-description">飞书开放平台 → 当前应用 → 事件与回调，选择“使用长连接接收事件”，添加“接收消息”事件（im.message.receive_v1）。开通下方机器人权限并发布生效后，即可私聊机器人或在群内 @ 机器人。</p><button type="button" className="console-ghost" onClick={() => { void copyText(JSON.stringify({scopes:{tenant:config.bot!.required_scopes}}, null, 2)).then(() => setNotice('机器人权限 JSON 已复制。')).catch(() => setError('复制失败，请重试。')) }}>复制机器人权限 JSON</button></>}
+        {mode === 'personal' && <p className="console-section-description">机器人会按飞书授权身份识别本人。可提问“查看我的账号信息”；支持文字私聊与群内 @，按发送人绑定的账号执行，群内回复对群成员可见。</p>}
       </section>}
     </>}
   </div>

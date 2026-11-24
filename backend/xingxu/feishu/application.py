@@ -9,7 +9,7 @@ from ..auth import AuthFailure
 
 APPLICATION_SCOPES = ('contact:contact.base:readonly', 'contact:user.employee:readonly',
                       'contact:user.employee_id:readonly', 'attendance:task:readonly',
-                      'im:message.p2p_msg:readonly', 'im:message:send_as_bot')
+                      'im:message.p2p_msg:readonly', 'im:message.group_at_msg:readonly', 'im:message:send_as_bot')
 
 
 class FeishuApplication:

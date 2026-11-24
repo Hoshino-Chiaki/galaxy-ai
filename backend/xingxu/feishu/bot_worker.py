@@ -27,12 +27,18 @@ def main():
         event, header = data.event, data.header
         source = event.message
         sender = event.sender
-        if sender.sender_type != 'user' or source.chat_type != 'p2p':
+        if sender.sender_type != 'user' or source.chat_type not in ('p2p', 'group'):
+            return
+        mentions = [{'key': row.key, 'id': {'open_id': getattr(row.id, 'open_id', None)}}
+                    for row in (getattr(source, 'mentions', None) or []) if getattr(row, 'id', None) is not None]
+        if source.chat_type == 'group' and not mentions:
             return
         body = {'type': 'message', 'app_id': header.app_id, 'tenant_key': header.tenant_key,
             'open_id': sender.sender_id.open_id, 'sender_type': sender.sender_type,
             'message_id': source.message_id, 'chat_id': source.chat_id,
-            'chat_type': source.chat_type, 'message_type': source.message_type, 'content': source.content}
+            'chat_type': source.chat_type, 'message_type': source.message_type, 'content': source.content,
+            'create_time': getattr(source, 'create_time', None),
+            'mentions': mentions}
         emit(body)
         # ACK only after the parent durably records this message. SDK/platform retries on failure.
         if not select.select([sys.stdin], [], [], 2.5)[0]:

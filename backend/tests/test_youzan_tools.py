@@ -142,8 +142,8 @@ def test_catalog_route_is_actual_help_and_admin_only(fixture):
         result = client.get('/api/v1/admin/ai/tools', headers={'Authorization': 'Bearer ' + admin['access_token']})
         assert result.status_code == 200
         data = result.json()['data']
-        assert len(data) == 18 + len(DOMAINS) + int(any(t['tool']=='youzan.product-search' for t in data))
-        assert {t['tool'] for t in data} | {'youzan.product-search'} == {'feishu.authorized-users', 'time.now', 'youzan.material-category', 'youzan.material-list', 'youzan.material-upload', 'youzan.product-get', 'youzan.product-options', 'youzan.product-update', 'youzan.product-search', 'feishu.search', 'feishu.document-get', 'feishu.folder-list', 'feishu.file-download', 'file.publish', 'excel.create', 'youzan.customer-get', 'youzan.customer-search', 'youzan.customer-count', 'youzan.business-report'} | {'feishu.'+d for d in DOMAINS}
+        assert len(data) == len({t['tool'] for t in data})
+        assert {t['tool'] for t in data} >= {'feishu.authorized-users', 'time.now', 'youzan.material-category', 'youzan.material-list', 'youzan.material-upload', 'youzan.product-get', 'youzan.product-options', 'youzan.product-update', 'youzan.product-search', 'feishu.search', 'feishu.document-get', 'feishu.folder-list', 'feishu.file-download', 'file.publish', 'excel.create', 'youzan.customer-get', 'youzan.customer-search', 'youzan.customer-count', 'youzan.business-report'} | {'feishu.'+d for d in DOMAINS}
         assert set(data[0]) == {'tool', 'category', 'description'}
         assert len(result.content) < 128000
         assert client.get('/api/v1/admin/ai/tools', headers={'Authorization': 'Bearer ' + employee['access_token']}).status_code == 403

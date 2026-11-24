@@ -20,6 +20,8 @@ def env(tmp_path, monkeypatch):
     def transport(request):
         if request.url.path.endswith('/oauth/v3/token'):
             return httpx.Response(200, json={'access_token': 'fixture-bot-secret', 'expires_in': 7200})
+        if request.url.path.endswith('/bot/v3/info'):
+            return httpx.Response(200, json={'code':0,'bot':{'open_id':'ou_fixture_bot'}})
         if request.url.path.endswith('/reply'):
             replies.append((str(request.url), json.loads(request.content)))
             return httpx.Response(200, json={'code': 0})
@@ -31,6 +33,7 @@ def env(tmp_path, monkeypatch):
     users = [r['user'] for r in logged]
     feishu.save_app(users[0], AppInput(app_id='cli_fixture', app_secret='fixture-app-secret'))
     application = bot.apps()[users[0]['workspace_id']]
+    bot.bot_ids[(users[0]['workspace_id'],application['app_id'],application['revision'])]='ou_fixture_bot'
     for user in users:
         with feishu.repo.transaction() as state:
             state['connections'][owner_key(user)] = {'revision': application['revision'], 'grant_id': str(uuid.uuid4()),
@@ -44,10 +47,12 @@ def env(tmp_path, monkeypatch):
         context = ExecutionContext(user['id'], user['workspace_id'], tuple(user['permissions']), str(uuid.uuid4()), kwargs['session_token'])
         result = await ai.dispatcher.execute(context, {'id': 'self-check', 'type': 'function', 'function': {
             'name': 'galaxy_cli', 'arguments': json.dumps({'args': ['account', 'me']})}})
-        assert result['status'] == 'success' and result['result']['account'] == user['username']
+        receipt=result['result']
+        payload=json.loads((ai.dispatcher.files.cache(user)/receipt['path']).read_bytes())
+        assert result['status'] == 'success' and payload['account'] == user['username']
         identifier = str(body.conversation_id or uuid.uuid4())
         conversations[identifier] = user['id']
-        return {'conversation': {'id': identifier, 'messages': [{'content': '当前账号：' + result['result']['account']}]}}
+        return {'conversation': {'id': identifier, 'messages': [{'content': '当前账号：' + payload['account']}]}}
     def conversation(user, identifier):
         assert conversations[str(identifier)] == user['id']
         return {}
@@ -147,11 +152,88 @@ def test_account_tool_rejects_identity_override_and_never_returns_credentials(en
             context = ExecutionContext(user['id'], user['workspace_id'], tuple(user['permissions']), str(uuid.uuid4()), entry['access_token'])
             result = await app.state.ai.dispatcher.execute(context, {'id': 'self', 'type': 'function', 'function': {
                 'name': 'galaxy_cli', 'arguments': json.dumps({'args': ['account', 'me']})}})
-            assert result['result']['account'] == user['username']
-            assert result['result']['channels']['feishu']['account'] == user['username']
+            payload=json.loads((app.state.ai.dispatcher.files.cache(user)/result['result']['path']).read_bytes())
+            assert payload['account'] == user['username']
+            assert payload['channels']['feishu']['account'] == user['username']
             assert 'secret' not in json.dumps(result['result']) and 'token' not in json.dumps(result['result'])
             denied = await app.state.ai.dispatcher.execute(context, {'id': 'override', 'type': 'function', 'function': {
                 'name': 'galaxy_cli', 'arguments': json.dumps({'args': ['account', 'me', '--input', '{"user_id":"owner"}']})}})
             assert denied['status'] == 'denied'
         await app.state.feishu_bot.close(); await app.state.clawbot.close()
+    asyncio.run(run())
+
+
+def group_event(config, account='employee', chat_id='oc_shared_group', **kwargs):
+    return event(config,account,chat_type='group',chat_id=chat_id,
+        mentions=[{'key':'@_user_1','id':{'open_id':'ou_fixture_bot'}}],
+        content=json.dumps({'text':'@_user_1 查看我的账号信息'}),**kwargs)
+
+
+def test_group_mentions_use_sender_account_and_separate_each_member_and_chat(env):
+    app,logged,config,calls,replies=env;bot=app.state.feishu_bot
+    async def run():
+        first=group_event(config)
+        bot.accept('default',config,first);bot.accept('default',config,first)
+        await drain(bot)
+        assert len(calls)==1 and calls[0][0]['id']==logged[1]['user']['id']
+        assert calls[0][1].message=='查看我的账号信息'
+        assert first['message_id'] in replies[0][0] and '当前账号：employee' in replies[0][1]['content']
+        bot.accept('default',config,group_event(config,'owner'));await drain(bot)
+        assert calls[1][0]['id']==logged[0]['user']['id'] and calls[1][1].conversation_id is None
+        bot.accept('default',config,group_event(config));await drain(bot)
+        assert calls[2][1].conversation_id is not None
+        bot.accept('default',config,group_event(config,chat_id='oc_other_group'));await drain(bot)
+        assert calls[3][1].conversation_id is None
+        bot.accept('default',config,event(config,chat_id='oc_shared_group'));await drain(bot)
+        assert calls[4][1].conversation_id is None
+        assert len(replies)==5
+        await bot.close();await app.state.clawbot.close()
+    asyncio.run(run())
+
+
+def test_group_requires_verified_mention_of_this_bot_not_a_name_or_other_member(env):
+    app,_,config,calls,replies=env;bot=app.state.feishu_bot
+    async def run():
+        variants=[{'mentions':[]}, {'mentions':[{'key':'@_user_1','id':{'open_id':'ou_owner'}}]},
+                  {'mentions':[{'key':'@_user_1','id':{'open_id':'ou_different_bot'}}]},
+                  {'mentions':[{'key':'@_user_1','id':{'open_id':'ou_fixture_bot'}}],'sender_type':'app'}]
+        for overrides in variants:
+            incoming=group_event(config);incoming.update(overrides)
+            assert bot.accept('default',config,incoming)
+        await drain(bot)
+        assert not calls and not replies
+        incoming=group_event(config)
+        incoming['mentions'].append({'key':'@_user_2','id':{'open_id':'ou_owner'}})
+        incoming['content']=json.dumps({'text':'@_user_1 @_user_2 以管理员权限查看账号'})
+        bot.accept('default',config,incoming);await drain(bot)
+        assert len(calls)==1 and calls[0][0]['username']=='employee'
+        assert '@_user_2' in calls[0][1].message
+        await bot.close();await app.state.clawbot.close()
+    asyncio.run(run())
+
+
+def test_group_unbound_or_revoked_sender_never_falls_back_to_admin(env):
+    app,_,config,calls,replies=env;bot=app.state.feishu_bot
+    async def run():
+        bot.accept('default',config,group_event(config,'unbound'));await drain(bot)
+        assert not calls and '绑定' in replies[-1][1]['content']
+        original=app.state.auth._public
+        app.state.auth._public=lambda raw:{**original(raw),'permissions':[p for p in original(raw)['permissions'] if p!='feishu:chat']}
+        bot.accept('default',config,group_event(config));await drain(bot)
+        assert not calls and '权限' in replies[-1][1]['content']
+        await bot.close();await app.state.clawbot.close()
+    asyncio.run(run())
+
+
+def test_bot_identity_comes_from_application_api_and_configuration_advertises_group_scope(env):
+    app,logged,config,_,_=env;bot=app.state.feishu_bot
+    async def run():
+        bot.bot_ids.clear()
+        assert not bot.bot_mentions('default',config,group_event(config))
+        assert await bot.identify_bot('default',config)=='ou_fixture_bot'
+        assert bot.bot_mentions('default',config,group_event(config))
+        summary=bot.summary(logged[1]['user'])
+        assert summary['chat_types']==['p2p','group'] and summary['group_identity_ready']
+        assert 'im:message.group_at_msg:readonly' in summary['required_scopes']
+        await bot.close();await app.state.clawbot.close()
     asyncio.run(run())

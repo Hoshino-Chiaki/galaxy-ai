@@ -123,7 +123,23 @@ def account_library(owner):
     return library
 
 
-def jail_arguments(stage, broker, token, library=None):
+def account_cache(owner):
+    if os.environ.get('GALAXY_ACCOUNT_STORAGE') != 'files-v1':
+        raise ValueError('Account cache requires account storage')
+    cache = scope_root(owner).parent.parent / 'cache'
+    # Verify every component with O_NOFOLLOW before exposing this account's cache.
+    descriptor = os.open('/', os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        for part in cache.parts[1:]:
+            child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=descriptor)
+            os.close(descriptor)
+            descriptor = child
+    finally:
+        os.close(descriptor)
+    return cache
+
+
+def jail_arguments(stage, broker, token, library=None, cache=None):
     args = ['/usr/bin/bwrap', '--unshare-all', '--unshare-user', '--die-with-parent', '--new-session',
             '--disable-userns', '--cap-drop', 'ALL', '--uid', '0', '--gid', '0',
             '--ro-bind', '/usr', '/usr', '--tmpfs', '/usr/local',
@@ -137,6 +153,8 @@ def jail_arguments(stage, broker, token, library=None):
             '--ro-bind', str(broker), '/run/broker.sock', '--chdir', '/workspace', '--clearenv']
     if library is not None:
         args += ['--ro-bind', str(library), '/account-files']
+    if cache is not None:
+        args += ['--ro-bind', str(cache), '/account-cache']
     environment = {'PATH': '/runtime/bin:/runtime/venv/bin:/usr/bin:/bin', 'HOME': '/state',
         'LANG': 'C.UTF-8', 'PYTHONNOUSERSITE': '1', 'PYTHONDONTWRITEBYTECODE': '1',
         'GALAXY_RUN_TOKEN': token, 'NODE_OPTIONS': '--max-old-space-size=256'}
@@ -184,7 +202,8 @@ async def run_job(body, reader, writer):
             raise ValueError('Broker missing')
         await send(writer, {'type': 'ready'})
         library = account_library(owner) if body.get('account_files') is True else None
-        process = await asyncio.create_subprocess_exec(*jail_arguments(stage, broker, body['token'], library),
+        cache = account_cache(owner) if body.get('account_cache') is True else None
+        process = await asyncio.create_subprocess_exec(*jail_arguments(stage, broker, body['token'], library, cache),
             stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
             start_new_session=True, limit=1024 * 1024)
         process.stdin.write(json.dumps(body['input'], ensure_ascii=False).encode())

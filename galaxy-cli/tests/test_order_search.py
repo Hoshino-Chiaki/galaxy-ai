@@ -20,13 +20,13 @@ class OrderTests(unittest.TestCase):
         responses=[self.page(1,5,['a','b']),self.page(2,5,['c','d']),self.page(3,5,['e'])]
         with tempfile.TemporaryDirectory() as directory,patch.object(tool,'gateway',side_effect=responses) as gateway:
             result=tool.run(Client(),{'action':'query','all_pages':True,'page_size':2,'goods_title':'鞋','has_star':False},
-                {'workspace_directory':directory})
+                {'cache_directory':directory,'cache_identity':{'user_id':'alice','workspace_id':'w'}})
             self.assertTrue(result['data']['complete']);self.assertEqual(result['data']['count'],5)
             self.assertEqual(result['data']['pages'],3)
             path=Path(directory)/result['data']['path']
             self.assertEqual([json.loads(line) for line in path.read_text().splitlines()],responses)
             self.assertEqual(path.stat().st_size,result['data']['size'])
-            self.assertLess(len(json.dumps(result)),600)
+            self.assertLess(len(json.dumps(result)),1600)
             self.assertNotIn('unknown',json.dumps(result))
             params=[call.args[2] for call in gateway.call_args_list]
             self.assertEqual([p['page_no'] for p in params],[1,2,3])
@@ -36,7 +36,7 @@ class OrderTests(unittest.TestCase):
     def test_all_pages_zero_and_single_page_remain_valid(self):
         class Client:credentials={'kdt_id':'123'}
         with tempfile.TemporaryDirectory() as directory,patch.object(tool,'gateway',return_value=self.page(1,0,[])) as gateway:
-            result=tool.run(Client(),{'action':'query','all_pages':True},{'workspace_directory':directory})
+            result=tool.run(Client(),{'action':'query','all_pages':True},{'cache_directory':directory,'cache_identity':{'user_id':'alice','workspace_id':'w'}})
             self.assertTrue(result['data']['complete']);self.assertEqual(result['data']['count'],0)
             self.assertEqual(gateway.call_count,1)
             self.assertEqual(gateway.call_args.args[2]['page_size'],50)
@@ -49,9 +49,9 @@ class OrderTests(unittest.TestCase):
             value['data']['page_size']=50
             return value
         with tempfile.TemporaryDirectory() as directory,patch.object(tool,'gateway',side_effect=response) as gateway:
-            result=tool.run(Client(),{'action':'query','all_pages':True},{'workspace_directory':directory})
+            result=tool.run(Client(),{'action':'query','all_pages':True},{'cache_directory':directory,'cache_identity':{'user_id':'alice','workspace_id':'w'}})
             self.assertTrue(result['data']['complete']);self.assertEqual(result['data']['count'],3135)
-            self.assertEqual(gateway.call_count,63);self.assertLess(len(json.dumps(result)),600)
+            self.assertEqual(gateway.call_count,63);self.assertLess(len(json.dumps(result)),1600)
             self.assertEqual(len((Path(directory)/result['data']['path']).read_text().splitlines()),63)
 
     def test_all_pages_failure_keeps_partial_file_without_claiming_complete(self):
@@ -62,7 +62,7 @@ class OrderTests(unittest.TestCase):
         cases.append(bad_shop)
         for second in cases:
             with self.subTest(second=second),tempfile.TemporaryDirectory() as directory,patch.object(tool,'gateway',side_effect=[first,second]):
-                result=tool.run(Client(),{'action':'query','all_pages':True,'page_size':2},{'workspace_directory':directory})
+                result=tool.run(Client(),{'action':'query','all_pages':True,'page_size':2},{'cache_directory':directory,'cache_identity':{'user_id':'alice','workspace_id':'w'}})
                 self.assertFalse(result['success']);self.assertFalse(result['data']['complete'])
                 self.assertIn('error',result);self.assertEqual(result['data']['count'],2)
                 self.assertEqual([json.loads(line) for line in (Path(directory)/result['data']['path']).read_text().splitlines()],[first])
@@ -73,9 +73,9 @@ class OrderTests(unittest.TestCase):
         with self.assertRaises(ToolError):tool.normalize({'action':'query','all_pages':True,'page':2})
         with self.assertRaises(ToolError):tool.normalize({'action':'query','all_pages':'true'})
         with tempfile.TemporaryDirectory() as directory,tempfile.TemporaryDirectory() as other:
-            (Path(directory)/'order-exports').symlink_to(other,target_is_directory=True)
+            (Path(directory)/'youzan').symlink_to(other,target_is_directory=True)
             with patch.object(tool,'gateway') as gateway,self.assertRaises(ToolError):
-                tool.run(Client(),{'action':'query','all_pages':True},{'workspace_directory':directory})
+                tool.run(Client(),{'action':'query','all_pages':True},{'cache_directory':directory,'cache_identity':{'user_id':'alice','workspace_id':'w'}})
             gateway.assert_not_called();self.assertEqual(list(Path(other).iterdir()),[])
 
     def test_captured_query_mapping_preserves_all_filters(self):

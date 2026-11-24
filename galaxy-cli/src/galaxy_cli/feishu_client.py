@@ -106,7 +106,7 @@ def invoke(name, arguments):
         streams=[completed.stdout] if completed.returncode==0 else [completed.stderr,completed.stdout]
         result=None
         for raw in streams:
-            if len(raw)>2*1024*1024:raise ToolError('feishu_output_limit','飞书响应较大，请按章节、关键词或分页读取。',1)
+            if len(raw)>(64 if frame.get('result_cache') is True else 2)*1024*1024:raise ToolError('feishu_output_limit','飞书单次响应超出限制，请按章节、关键词或分页读取。',1)
             try:result=json.loads(raw);break
             except ValueError:continue
         if result is None:raise ToolError('feishu_cli_failed','飞书 CLI 未返回有效数据。',1)

@@ -1,8 +1,9 @@
-"""Feishu private-message entry into the same Galaxy AI, permissions and personal channels."""
+"""Feishu private messages and explicit group mentions use the sender's Galaxy identity."""
 import asyncio
 import copy
 import hashlib
 import json
+import re
 import time
 import uuid
 from pathlib import Path
@@ -12,7 +13,7 @@ from ..channel_identity import current, issue_session, execution_slot
 from .service import owner_key
 from .bot_storage import BotStore
 
-BOT_SCOPES = ('im:message.p2p_msg:readonly', 'im:message:send_as_bot')
+BOT_SCOPES = ('im:message.p2p_msg:readonly', 'im:message.group_at_msg:readonly', 'im:message:send_as_bot')
 
 
 class FeishuBot:
@@ -21,6 +22,7 @@ class FeishuBot:
         self.store = BotStore(directory, feishu)
         self.workers, self.jobs, self.principals, self.status = {}, {}, {}, {}
         self.monitor = None
+        self.bot_ids = {}
         self.ai_slot = execution_slot(ai)
 
     def apps(self):
@@ -36,7 +38,32 @@ class FeishuBot:
             'identity_bound': bound, 'allowed': 'feishu:chat' in user['permissions'],
             'last_message_at': status.get('last_message_at'), 'last_reply_at': status.get('last_reply_at'),
             'error': status.get('error'), 'required_scopes': list(BOT_SCOPES),
-            'event': 'im.message.receive_v1', 'transport': 'websocket', 'chat_types': ['p2p']}
+            'event': 'im.message.receive_v1', 'transport': 'websocket', 'chat_types': ['p2p', 'group'],
+            'group_requires_mention': True,
+            'group_identity_ready': bool(app and self.bot_ids.get((user['workspace_id'], app['app_id'], app['revision'])))}
+
+    async def identify_bot(self, workspace, app):
+        """Resolve this application's own ID from Feishu, never from a message/name."""
+        for attempt in range(2):
+            token = await self.feishu.application.token({**app, 'app_secret': self.feishu._decrypt(app['secret'])}, force=attempt > 0)
+            status, value = await self.feishu.application._request('GET',
+                'https://open.feishu.cn/open-apis/bot/v3/info', headers={'Authorization': 'Bearer ' + token['access_token']})
+            if value.get('code') not in (99991672, 99991663):
+                break
+        identifier = value.get('bot', {}).get('open_id') if isinstance(value.get('bot'), dict) else None
+        if status != 200 or value.get('code') != 0 or not isinstance(identifier, str) or not identifier:
+            raise AuthFailure('feishu_bot_identity_unavailable', '无法确认当前机器人身份，群聊入口暂不可用。', 502)
+        self.bot_ids[(workspace, app['app_id'], app['revision'])] = identifier
+        return identifier
+
+    def bot_mentions(self, workspace, app, event):
+        identifier = self.bot_ids.get((workspace, app['app_id'], app['revision']))
+        mentions = event.get('mentions')
+        if not identifier or not isinstance(mentions, list):
+            return []
+        return [row for row in mentions if isinstance(row, dict) and isinstance(row.get('id'), dict)
+                and row['id'].get('open_id') == identifier and isinstance(row.get('key'), str)
+                and re.fullmatch(r'@_user_\d+', row['key'])]
 
     def start(self):
         self.monitor = asyncio.create_task(self.watch())
@@ -73,6 +100,12 @@ class FeishuBot:
                         await self.stop_worker(worker)
                         self.workers.pop(workspace, None)
                 for workspace, app in apps.items():
+                    if (workspace, app['app_id'], app['revision']) not in self.bot_ids:
+                        try:
+                            await self.identify_bot(workspace, app)
+                        except AuthFailure:
+                            # A new group capability must not break existing p2p chat.
+                            pass
                     if workspace not in self.workers:
                         try:
                             await self.launch(workspace, app)
@@ -127,12 +160,14 @@ class FeishuBot:
         if (event.get('app_id') != app['app_id'] or not isinstance(event.get('message_id'), str)
                 or not event['message_id'] or not event.get('open_id') or not event.get('tenant_key')):
             return False
-        if event.get('sender_type') != 'user' or event.get('chat_type') != 'p2p':
+        if event.get('sender_type') != 'user' or event.get('chat_type') not in ('p2p', 'group'):
+            return True
+        if event['chat_type'] == 'group' and not self.bot_mentions(workspace, app, event):
             return True
         with self.store.transaction(workspace, app['app_id']) as state:
             if event['message_id'] in state['messages']:
                 return True
-            message = {k: event.get(k) for k in ('message_id', 'chat_id', 'open_id', 'tenant_key', 'message_type', 'content')}
+            message = {k: event.get(k) for k in ('message_id', 'chat_id', 'chat_type', 'open_id', 'tenant_key', 'message_type', 'content', 'mentions', 'create_time')}
             message.update(status='queued', received_at=time.time(), revision=app['revision'])
             state['messages'][message['message_id']] = message
         self.status.setdefault(workspace, {}).update(last_message_at=time.time())
@@ -201,9 +236,19 @@ class FeishuBot:
             if message.get('message_type') != 'text':
                 raise AuthFailure('feishu_text_required', '当前入口先支持文字消息，请发送文字问题。', 422)
             text = json.loads(message['content']).get('text', '').strip()
+            if message.get('chat_type') == 'group':
+                mentions = self.bot_mentions(workspace, app, message)
+                if not mentions:
+                    raise AuthFailure('feishu_bot_identity_unavailable', '机器人身份已变化，请重新 @ 当前机器人。', 409)
+                for mention in mentions:
+                    text = re.sub(re.escape(mention['key']) + r'(?![\w])', '', text).strip()
             if not text or len(text) > 8000:
                 raise AuthFailure('invalid_input', '请输入1至8000字的文字问题。', 422)
-            scope = hashlib.sha256(json.dumps([user['id'], message['open_id'], message['chat_id']]).encode()).hexdigest()
+            # Keep the existing private scope, and separate each group sender.
+            scope_parts = [user['id'], message['open_id'], message['chat_id']]
+            if message.get('chat_type') == 'group':
+                scope_parts.insert(0, 'group')
+            scope = hashlib.sha256(json.dumps(scope_parts).encode()).hexdigest()
             async with self.ai_slot:
                 if getattr(self.ai, 'runtime_name', None) == 'dsh':
                     from ..dsh_runtime import worker_request
@@ -225,9 +270,14 @@ class FeishuBot:
                             raise
                         conversation_id = None
                 token = issue_session(self.auth, user, raw)
+                channel_context = None
+                if message.get('chat_type') == 'group':
+                    from .group_context import load_group_context
+                    channel_context = await load_group_context(self, user, app, message, token, conversation_id)
                 from ..ai import ChatInput
                 result = await self.ai.send(user, ChatInput(message=text, request_id=uuid.uuid4(),
-                    conversation_id=conversation_id, interactive_questions=False), session_token=token, entry_point="feishu")
+                    conversation_id=conversation_id, interactive_questions=False), session_token=token, entry_point="feishu",
+                    **({'channel_context': channel_context} if channel_context is not None else {}))
                 conversation = result['conversation']
                 with self.store.transaction(workspace, app['app_id']) as state:
                     state['conversations'][scope] = conversation['id']

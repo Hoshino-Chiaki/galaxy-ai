@@ -41,6 +41,15 @@ class FileService:
     def dsh_root(self, user):
         return Accounts(self.directory).path(user, 'tasks/dsh') if account_files(self.directory) else Path(os.environ.get('GALAXY_DSH_STORAGE') or self.root / '.dsh') / hashlib.sha256(json.dumps([user['workspace_id'], user['id']], separators=(',', ':')).encode()).hexdigest()
 
+    def cache(self, user):
+        # Only the authenticated principal chooses the account, never model input.
+        if account_files(self.directory):
+            return Accounts(self.directory).path(user, 'cache')
+        workspace = self.workspace(user)
+        with root_directory(workspace) as root, child_directory(root, ['cache'], create=True):
+            pass
+        return workspace / 'cache'
+
     def workspace(self, user):
         # Identity never comes from model arguments or a caller-supplied path.
         if account_files(self.directory):
@@ -61,6 +70,8 @@ class FileService:
         except ToolError:
             raise AuthFailure('invalid_storage','有赞操作锁目录不可用。',502) from None
         return {'workspace_directory':str(workspace),'catalog_lock_directory':str(self.root/'.locks'/scope),
+            'cache_directory':str(self.cache(user)),
+            'cache_identity':{'user_id':user['id'],'workspace_id':user['workspace_id']},
             'permissions':list(user['permissions'])}
 
     def inspect_source(self, user, relative):

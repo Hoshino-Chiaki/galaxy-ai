@@ -2,12 +2,11 @@
 import copy
 import hashlib
 import json
-import os
 import uuid
 from urllib.parse import urlencode
 from jsonschema import Draft202012Validator
 from ...registry import ToolError
-from ...file_scope import root_directory, child_directory
+from ...request_cache import CachedDataset
 from ...youzan_catalog import IDS, ID, OUTPUT, object_schema, invalid, client_context
 from .product_search import date_value
 
@@ -45,7 +44,7 @@ DESCRIPTION = ('查询有赞订单：galaxy-cli youzan order-search options/quer
  '其他可选：goods_title商品名称、brand_id_list品牌ID字符串数组、sale_way销售渠道、shop_kdt_ids有数据权限的分店ID字符串数组、order_type订单类型、order_state单个状态或互斥的order_state_list状态数组（3待付款/5待发货/6已发货/50待成团等/100成功/99关闭/600001售后中/600002退款结束）。'
  'feedback_state售后状态600001售后中/250售后结束；express_type配送0快递/1自提/2同城/600001快递或同城；buy_way支付方式；is_reminder_status是否催单、has_star是否加星为布尔；marketing_type推广1有赞客/2三方应用/3分销员/4导购员；table_id桌号ID；order_sources订单来源值字符串数组；real_pay_min/real_pay_max为实付金额上下限，按网页输入整数元。所有条件同时生效，全部选项应省略字段，不传-1。'
  '默认返回完整原始单页订单JSON，保留所有业务字段；仅隐藏会话凭证。code=200且success不为false才成功；data.data为当前页订单，data.total为满足全部条件的总数，data.page_no/page_size为分页。总数不是本页数量。'
- '需要全部订单时，query 传 all_pages=true（page只能省略或为1，page_size默认50），程序自动按total连续翻页，筛选保持不变，无需AI逐页调用或另写脚本。每页完整原始响应写入当前账号工作目录的JSONL文件，每行一个响应；仅返回data中的path、filename、size、total、count、pages、complete，不把订单明细重复塞进聊天。path可供后续程序读取、分析或制表，本工具不生成Excel。只有complete=true才表示全部取得；中途接口失败、空页、重复页或总数变化时返回error及已保存部分的路径和数量，不得当成完整结果。未传all_pages或为false仍返回原始单页数据。'
+ '需要全部订单时，query 传 all_pages=true（page只能省略或为1，page_size默认50），程序自动按total连续翻页，筛选保持不变，无需AI逐页调用或另写脚本。每页完整原始响应写入本人cache/youzan/orders/店铺ID下的JSONL文件，每行一个响应。返回cache_id、sandbox_path、metadata_path、size、total、count、pages、complete、created_at、expires_at、sha256等摘要，不把明细塞进聊天。Python直接打开sandbox_path（/account-cache/开头），每行JSON的data.data为该页订单；metadata_path记录店铺和筛选条件。不要在/workspace寻找缓存或重新逐页下载，不要复制原始大文件到/workspace，读取缓存后直接制表。本工具不生成Excel。缓存是本次抓取快照，不自动复用旧查询，默认7天、每账号512MiB；后续写入清理过期数据。只有complete=true才表示全部取得；中途接口失败、空页、重复页或总数变化时返回error及已保存部分的路径和数量，不得当成完整结果。未传all_pages或为false仍返回原始单页数据。'
  '时间字段按接口原值解析；payment_info中的real_pay/payment/postage/total_discount等为分，输入金额筛选仍是元，其他金额字段以实际定义为准。只读查询，不创建、修改、退款或发货。跨店范围可在galaxy_cli外层shops传all/current/店铺ID或名称数组；shop_kdt_ids仅是当前店铺内的分店筛选，不是切换授权店铺。')
 
 
@@ -128,40 +127,41 @@ def query_page(client,args):
 
 
 def query_all(client,args,context):
-    if not isinstance(context,dict) or not isinstance(context.get('workspace_directory'),str):
-        raise ToolError('invalid_context','全部订单需使用当前账号的服务器工作目录。',1)
-    name='orders-'+uuid.uuid4().hex+'.jsonl'
-    metadata={'path':'order-exports/'+name,'filename':name,'size':0,'total':None,'count':0,'pages':0,'complete':False}
+    shop=str(client.credentials['kdt_id'])
+    if not shop.isascii() or not shop.isdigit():
+        raise ToolError('invalid_context','缓存店铺标识无效。',1)
     fingerprints=set()
-    with root_directory(context['workspace_directory']) as root, child_directory(root,['order-exports'],create=True) as directory:
-        fd=os.open(name,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW|os.O_CLOEXEC,0o600,dir_fd=directory)
-        with os.fdopen(fd,'wb') as stream:
-            while True:
-                try:
-                    result=query_page(client,args)
-                    if result.get('code')!=200 or result.get('success') is False:
-                        raise ToolError('pagination_upstream_failed','订单接口未成功，自动翻页已停止；已保存部分不代表全部订单。',1)
-                    data=result['data'];rows=data['data']
-                    if metadata['total'] is None:metadata['total']=data['total']
-                    if data['total']!=metadata['total']:
-                        raise ToolError('pagination_changed','查询期间订单总数发生变化，已停止；请按固定时间范围重新查询。',1)
-                    if 'page_no' in data and data['page_no']!=args['page']:
-                        raise ToolError('pagination_stalled','订单接口返回的页码不符，已停止，不能视为全部结果。',1)
-                    fingerprint=hashlib.sha256(json.dumps(rows,ensure_ascii=False,sort_keys=True).encode()).digest()
-                    if fingerprint in fingerprints or not rows and metadata['count']<metadata['total']:
-                        raise ToolError('pagination_stalled','订单接口返回重复页或提前空页，已停止，不能视为全部结果。',1)
-                    if metadata['count']+len(rows)>metadata['total']:
-                        raise ToolError('pagination_changed','订单数量与接口总数不符，已停止，不能视为全部结果。',1)
-                except ToolError as error:
-                    return {'code':502,'success':False,'error':{'code':error.code,'message':error.message},'data':metadata}
+    with CachedDataset(context,'youzan/orders/'+shop,{'shop_id':shop,'filters':query_params(args)}) as dataset:
+        metadata=dataset.metadata
+        while True:
+            try:
+                result=query_page(client,args)
+                if result.get('code')!=200 or result.get('success') is False:
+                    raise ToolError('pagination_upstream_failed','订单接口未成功，自动翻页已停止；已保存部分不代表全部订单。',1)
+                data=result['data'];rows=data['data']
+                if metadata['total'] is None:metadata['total']=data['total']
+                if data['total']!=metadata['total']:
+                    raise ToolError('pagination_changed','查询期间订单总数发生变化，已停止；请按固定时间范围重新查询。',1)
+                if 'page_no' in data and data['page_no']!=args['page']:
+                    raise ToolError('pagination_stalled','订单接口返回的页码不符，已停止，不能视为全部结果。',1)
+                fingerprint=hashlib.sha256(json.dumps(rows,ensure_ascii=False,sort_keys=True).encode()).digest()
+                if fingerprint in fingerprints or not rows and metadata['count']<metadata['total']:
+                    raise ToolError('pagination_stalled','订单接口返回重复页或提前空页，已停止，不能视为全部结果。',1)
+                if metadata['count']+len(rows)>metadata['total']:
+                    raise ToolError('pagination_changed','订单数量与接口总数不符，已停止，不能视为全部结果。',1)
                 encoded=json.dumps(result,ensure_ascii=False,allow_nan=False,separators=(',',':')).encode()+b'\n'
-                stream.write(encoded);stream.flush();os.fsync(stream.fileno())
-                fingerprints.add(fingerprint)
-                metadata.update(size=metadata['size']+len(encoded),count=metadata['count']+len(rows),pages=metadata['pages']+1)
-                if metadata['count']==metadata['total']:
-                    metadata['complete']=True
-                    return {'code':200,'success':True,'data':metadata}
-                args={**args,'page':args['page']+1}
+                dataset.append(encoded)
+            except ToolError as error:
+                dataset.save()
+                return {'code':502,'success':False,'error':{'code':error.code,'message':error.message},'data':metadata}
+            fingerprints.add(fingerprint)
+            metadata.update(count=metadata['count']+len(rows),pages=metadata['pages']+1)
+            dataset.save()
+            if metadata['count']==metadata['total']:
+                metadata['complete']=True
+                dataset.save()
+                return {'code':200,'success':True,'data':metadata}
+            args={**args,'page':args['page']+1}
 
 
 def run(client,args,context=None):
