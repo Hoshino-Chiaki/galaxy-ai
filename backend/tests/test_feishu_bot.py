@@ -82,6 +82,9 @@ def test_feishu_employee_uses_existing_ai_and_own_account_tool(env):
         assert len(calls) == 1 and calls[0][0]['id'] == logged[1]['user']['id']
         assert not calls[0][1].interactive_questions
         assert len(replies) == 1 and '当前账号：employee' in replies[0][1]['content']
+        assert replies[0][1]['msg_type'] == 'post'
+        assert json.loads(replies[0][1]['content']) == {
+            'zh_cn': {'content': [[{'tag': 'md', 'text': '当前账号：employee'}]]}}
         with pytest.raises(AuthFailure):
             app.state.auth.identity(calls[0][2]['session_token'])
         assert bot.accept('default', config, event(config))
@@ -236,4 +239,31 @@ def test_bot_identity_comes_from_application_api_and_configuration_advertises_gr
         assert summary['chat_types']==['p2p','group'] and summary['group_identity_ready']
         assert 'im:message.group_at_msg:readonly' in summary['required_scopes']
         await bot.close();await app.state.clawbot.close()
+    asyncio.run(run())
+
+
+def test_markdown_reply_rechecks_authorization_and_retries_expired_app_token(env):
+    app, _, config, _, replies = env
+    bot = app.state.feishu_bot
+    original_request = app.state.feishu.application._request
+    attempts, checks = [], []
+    async def expired_once(method, url, **kwargs):
+        if url.endswith('/reply'):
+            attempts.append(kwargs['json'])
+            if len(attempts) == 1:
+                return 400, {'code': 99991672}
+        return await original_request(method, url, **kwargs)
+    app.state.feishu.application._request = expired_once
+    async def run():
+        source = '## 报表\n\n| 店铺 | 订单 |\n| --- | --- |\n| 旗舰店 | 3 |'
+        await bot.reply('default', config, event(config), source, lambda: checks.append(True))
+        assert len(attempts) == 2 and attempts[0] == attempts[1]
+        assert len(checks) == 3
+        assert json.loads(replies[0][1]['content'])['zh_cn']['content'][0][0]['text'] == source
+        def denied():
+            raise AuthFailure('forbidden', '权限已撤回', 403)
+        with pytest.raises(AuthFailure):
+            await bot.reply('default', config, event(config), source, denied)
+        assert len(attempts) == 2
+        await bot.close(); await app.state.clawbot.close()
     asyncio.run(run())

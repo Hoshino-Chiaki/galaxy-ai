@@ -12,6 +12,7 @@ from ..auth import AuthFailure
 from ..channel_identity import current, issue_session, execution_slot
 from .service import owner_key
 from .bot_storage import BotStore
+from .bot_messages import markdown_posts
 
 BOT_SCOPES = ('im:message.p2p_msg:readonly', 'im:message.group_at_msg:readonly', 'im:message:send_as_bot')
 
@@ -203,7 +204,7 @@ class FeishuBot:
         return current(self.auth, matches[0], ('ai:chat', 'feishu:chat'))
 
     async def reply(self, workspace, app, message, text, authorize=lambda: None):
-        for index in range(0, len(text), 3500):
+        for index, payload in enumerate(markdown_posts(text)):
             authorize()
             for attempt in range(2):
                 token = await self.feishu.application.token({**app, 'app_secret': self.feishu._decrypt(app['secret'])}, force=attempt > 0)
@@ -211,7 +212,7 @@ class FeishuBot:
                 status, value = await self.feishu.application._request('POST',
                     'https://open.feishu.cn/open-apis/im/v1/messages/' + quote(message['message_id'], safe='') + '/reply',
                     headers={'Authorization': 'Bearer ' + token['access_token']},
-                    json={'msg_type': 'text', 'content': json.dumps({'text': text[index:index + 3500]}, ensure_ascii=False),
+                    json={**payload,
                         'uuid': str(uuid.uuid5(uuid.NAMESPACE_URL, app['app_id'] + message['message_id'] + str(index)))})
                 if value.get('code') not in (99991672, 99991663):
                     break
