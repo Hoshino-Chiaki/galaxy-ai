@@ -29,6 +29,7 @@ export default function Workspace({ user, onLogout, signingOut, error, onProfile
   const [erpOpen, setErpOpen] = useState(false)
   const [filesOpen, setFilesOpen] = useState(false)
   const canConfigure = user.permissions.includes('ai:configure')
+  const canPersonalPrompt = user.permissions.includes('ai:prompt:configure')
   const canAI = user.permissions.includes('ai:chat')
   const canManagePeople = user.permissions.includes('users:manage')
   const canUsage = user.permissions.includes('ai:usage:read')
@@ -74,7 +75,7 @@ export default function Workspace({ user, onLogout, signingOut, error, onProfile
           <span className="nav-icon ai-nav-avatar"><img src="./ai.png" alt="" /></span><span className="nav-label">AI</span>{module === 'ai' && <span className="active-indicator" />}
         </button>}
         {user.permissions.includes('schedule:read') && <button type="button" className={`nav-item${module === 'schedule' ? ' active' : ''}`} aria-label="任务调度" aria-current={module === 'schedule' ? 'page' : undefined} onClick={() => setModule('schedule')}><span className="nav-icon"><CalendarClock size={16} /></span><span className="nav-label">任务调度</span><small className="schedule-experiment">实验</small></button>}
-        {canConfigure && <button type="button" className={`nav-item${module === 'ai-settings' ? ' active' : ''}`} onClick={() => setModule('ai-settings')} aria-label="AI 设置">
+        {(canConfigure || canPersonalPrompt) && <button type="button" className={`nav-item${module === 'ai-settings' ? ' active' : ''}`} onClick={() => setModule('ai-settings')} aria-label="AI 设置">
           <span className="nav-icon"><Cpu size={16} /></span><span className="nav-label">AI 设置</span></button>}
         {(hasChannel('youzan') || hasChannel('feishu') || hasChannel('guanjia') || hasChannel('jushuitan') || hasChannel('clawbot')) && <>
           <button type="button" className={`nav-item console-nav${module.startsWith('console-') ? ' console-active' : ''}`} aria-label="我的账号" title="我的账号" aria-expanded={consoleOpen}
@@ -115,7 +116,7 @@ export default function Workspace({ user, onLogout, signingOut, error, onProfile
     {canUsage && module === 'erp-ai-usage' && <AiUsage />}
     {canFiles && module.startsWith('files-') && <FileManager key={module} mode={module === 'files-library' ? 'library' : 'published'} user={user} />}
     {module === 'about' && <AboutGalaxy status={updates} onCheck={() => { void checkUpdate() }} onInstall={() => { void installUpdate() }} />}
-    {canConfigure && module === 'ai-settings' && <AdminConsole />}
+    {(canConfigure || canPersonalPrompt) && module === 'ai-settings' && <AdminConsole key={`${user.id}:${canConfigure}:${canPersonalPrompt}`} personalOnly={!canConfigure} canPersonalPrompt={canPersonalPrompt} />}
     {module.startsWith('console-') && <section className="console-panel" aria-label="我的账号">
       <div className="console-scroll">{module === 'console-youzan' && hasChannel('youzan') ? <YouzanSettingsPanel /> : module === 'console-clawbot' && hasChannel('clawbot') ? <ClawbotSettings /> : module === 'console-guanjia' && hasChannel('guanjia') ? <GuanjiaSettings /> : module === 'console-jushuitan' && hasChannel('jushuitan') ? <JushuitanSettings /> : module === 'console-feishu' && hasChannel('feishu') ? <FeishuSettings key="personal" user={user} mode="personal" /> : null}</div>
     </section>}

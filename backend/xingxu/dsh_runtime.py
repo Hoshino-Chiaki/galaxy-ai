@@ -493,6 +493,16 @@ class DshTurn:
             reader, writer = await asyncio.open_unix_connection(SOCKET, limit=1024 * 1024)
             # Prompt composition remains server owned and is refreshed each turn.
             system_prompt = self.system_prompt
+            personal_prompts = getattr(self.ai, 'personal_prompts', None)
+            account_prompts = personal_prompts is not None and 'ai:prompt:configure' in self.principal()['permissions']
+            if account_prompts:
+                personal_prompts.library(self.principal())
+                # Personal instructions are injected by with_system_policy on
+                # every provider call. Avoid duplicating a long personal prompt
+                # in the harness environment (Linux limits each env value).
+                system_prompt = PROMPT + '\n\n' + '\n\n'.join(
+                    m['content'] for m in messages[:-1] if m['role'] == 'system'
+                    and not m['content'].startswith('【当前账号的个人提示词；'))
             library = getattr(getattr(self.ai.dispatcher, 'uploads', None), 'storage', None)
             account_files = library is not None and 'file:read' in self.principal()['permissions']
             if account_files:
@@ -506,6 +516,7 @@ class DshTurn:
             payload = {'command': 'run', 'owner': owner_key(self.context), 'conversation': self.context.conversation_id,
                 'account_files': account_files,
                 'account_cache': account_cache,
+                'account_prompts': account_prompts,
                 'run_id': self.identifier, 'token': self.token, 'previous': previous,
                 'input': {'system_prompt': system_prompt, 'prompt': prompt, 'model': self.provider['model'],
                     'max_tokens': self.provider.get('max_tokens') if self.native else (self.provider.get('max_tokens') or 8192),

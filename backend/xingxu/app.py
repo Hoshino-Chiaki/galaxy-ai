@@ -209,6 +209,9 @@ def create_app(data_dir=None, policy=None, ai_transport=None, youzan_transport=N
     application.include_router(profile_router(identity, token))
     from .file_storage_routes import create_router as file_storage_router
     application.include_router(file_storage_router(storage, identity, token, scoped_download))
+    from .personal_prompt_routes import create_router as personal_prompt_router
+    ai.personal_prompts.reauthorize = lambda bearer: service.identity(bearer)['user']
+    application.include_router(personal_prompt_router(ai.personal_prompts, identity, token, scoped_download))
     application.include_router(schedule_router(schedules, identity))
     application.include_router(clawbot_router(clawbot, identity))
 

@@ -253,6 +253,9 @@ const routes = {
   'chat.progress': value => ['GET', `/api/v1/chat/runs/${identifier(value.request_id)}`],
   'upload.status': value => ['GET', `/api/v1/uploads/${identifier(value.id)}`],
   'storage.list': () => ['GET', '/api/v1/storage'],
+  'prompt.get': () => ['GET', '/api/v1/personal-prompt'],
+  'prompt.save': value => ['PUT', '/api/v1/personal-prompt', { prompt: value.prompt }],
+  'prompt.delete': value => ['DELETE', `/api/v1/personal-prompt/files/${identifier(value.id)}`],
   'storage.published': () => ['GET', '/api/v1/storage/published'],
   'storage.delete': value => ['DELETE', `/api/v1/storage/files/${identifier(value.id)}`],
   'admin.storage': () => ['GET', '/api/v1/admin/ai/storage'],
@@ -261,24 +264,27 @@ const routes = {
 }
 async function api(action, value, notify = () => {}) {
   try {
-    if (!Object.hasOwn(routes, action) && !['file.download', 'file.upload', 'file.upload.cancel', 'storage.upload', 'storage.download', 'storage.thumbnail', 'storage.cancel'].includes(action)) throw new Error('不支持的操作。')
+    if (!Object.hasOwn(routes, action) && !['file.download', 'file.upload', 'file.upload.cancel', 'storage.upload', 'storage.download', 'storage.thumbnail', 'storage.cancel', 'prompt.upload', 'prompt.download', 'prompt.cancel'].includes(action)) throw new Error('不支持的操作。')
     await operations
     await restoreSession()
     if (!token) throw new Error('请先登录。')
     const captured = token
-    if (action.startsWith('storage.') && ['storage.upload','storage.download','storage.thumbnail','storage.cancel'].includes(action)) {
+    if (['storage.upload','storage.download','storage.thumbnail','storage.cancel','prompt.upload','prompt.download','prompt.cancel'].includes(action)) {
+      const personalPrompt = action.startsWith('prompt.')
+      const apiRoot = personalPrompt ? '/api/v1/personal-prompt' : '/api/v1/storage'
       const context = { bearer: captured, authority, agent, request, isCurrent: () => token === captured,
+        apiRoot, title: personalPrompt ? '添加个人提示词附件 · 合计最多 25 MB' : undefined,
         notify: progress => { if (token === captured) notify(progress) } }
-      if (action === 'storage.upload') return { ok: true, data: await storageTransfers.upload(context) }
-      if (action === 'storage.cancel') return { ok: true, data: storageTransfers.cancel(identifier(value?.id), captured) }
+      if (action.endsWith('.upload')) return { ok: true, data: await storageTransfers.upload(context) }
+      if (action.endsWith('.cancel')) return { ok: true, data: storageTransfers.cancel(identifier(value?.id), captured) }
       if (action === 'storage.thumbnail') {
         const content = await request('GET', `/api/v1/storage/files/${identifier(value?.id)}/thumbnail`, null, captured, 30000, 'image/jpeg')
         if (token !== captured) throw Error('账号已切换。')
         return { ok: true, data: { image: 'data:image/jpeg;base64,' + content.toString('base64') } }
       }
-      const route = value?.kind === 'published'
+      const route = !personalPrompt && value?.kind === 'published'
         ? `/api/v1/storage/published/${value.scope === 'shared' ? 'shared' : 'personal'}/${encodeURIComponent(value.name)}/metadata`
-        : `/api/v1/storage/files/${identifier(value?.id)}/metadata`
+        : `${apiRoot}/files/${identifier(value?.id)}/metadata`
       const metadata = await request('GET', route, null, captured)
       if (token !== captured) throw Error('账号已切换。')
       return { ok: true, data: await storageTransfers.download(metadata, context) }

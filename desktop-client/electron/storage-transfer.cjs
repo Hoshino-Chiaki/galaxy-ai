@@ -14,8 +14,8 @@ function cancel(id, owner) {
 }
 
 async function upload(context) {
-  const { bearer, authority, agent, request, isCurrent, notify } = context
-  const selected = await dialog.showOpenDialog(BrowserWindow.getFocusedWindow(), { title: '上传到我的 AI 文件存储', properties: ['openFile', 'multiSelections'] })
+  const { bearer, authority, agent, request, isCurrent, notify, apiRoot = '/api/v1/storage' } = context
+  const selected = await dialog.showOpenDialog(BrowserWindow.getFocusedWindow(), { title: context.title || '上传到我的 AI 文件存储', properties: ['openFile', 'multiSelections'] })
   if (selected.canceled || !selected.filePaths?.length) return { canceled: true, files: [], failures: [] }
   const files = [], failures = []
   for (const source of selected.filePaths) {
@@ -26,12 +26,12 @@ async function upload(context) {
       handle = await fs.open(source, 'r')
       const before = await handle.stat()
       if (!before.isFile()) throw new Error('请选择普通文件。')
-      ticket = await request('POST', '/api/v1/storage/uploads', { filename, size: before.size }, bearer)
+      ticket = await request('POST', apiRoot + '/uploads', { filename, size: before.size }, bearer)
       if (!isCurrent()) throw new Error('账号已切换。')
       const transfer = { owner: bearer, cancel: () => {} }; active.set(ticket.id, transfer)
       stream = handle.createReadStream({ autoClose: false, highWaterMark: 256 * 1024 })
       const receipt = await new Promise((resolve, reject) => {
-        const req = https.request(new URL(`/api/v1/storage/uploads/${ticket.id}/content`, authority), {
+        const req = https.request(new URL(`${apiRoot}/uploads/${ticket.id}/content`, authority), {
           method: 'PUT', agent, headers: { Authorization: `Bearer ${bearer}`, 'Content-Type': 'application/octet-stream', 'Content-Length': before.size },
         }, res => {
           const parts = []; let total = 0
@@ -62,7 +62,7 @@ async function upload(context) {
       })
       const after = await handle.stat()
       if (before.size !== after.size || before.mtimeMs !== after.mtimeMs) {
-        await request('DELETE', `/api/v1/storage/files/${ticket.id}`, null, bearer).catch(() => {})
+        await request('DELETE', `${apiRoot}/files/${ticket.id}`, null, bearer).catch(() => {})
         throw Error('文件在上传时发生变化，请重新选择。')
       }
       complete = true; files.push(receipt)
@@ -73,7 +73,7 @@ async function upload(context) {
       stream?.destroy(); await handle?.close().catch(() => {})
       if (ticket) {
         active.delete(ticket.id)
-        if (!complete) await request('DELETE', `/api/v1/storage/uploads/${ticket.id}`, null, bearer).catch(() => {})
+        if (!complete) await request('DELETE', `${apiRoot}/uploads/${ticket.id}`, null, bearer).catch(() => {})
       }
     }
   }
@@ -81,9 +81,9 @@ async function upload(context) {
 }
 
 async function download(metadata, context) {
-  const { bearer, authority, agent, isCurrent } = context
+  const { bearer, authority, agent, isCurrent, apiRoot = '/api/v1/storage' } = context
   const route = metadata.download_path
-  if (typeof route !== 'string' || !route.startsWith('/api/v1/storage/') || new URL(route, authority).origin !== authority.origin) throw Error('下载地址无效。')
+  if (typeof route !== 'string' || !route.startsWith(apiRoot + '/') || new URL(route, authority).origin !== authority.origin) throw Error('下载地址无效。')
   const filename = path.basename(metadata.filename).replace(/[<>:"/\\|?*\x00-\x1f]/g, '_')
   const selected = await dialog.showSaveDialog(BrowserWindow.getFocusedWindow(), { title: '下载文件', defaultPath: path.join(app.getPath('downloads'), filename) })
   if (selected.canceled || !selected.filePath) return { canceled: true }

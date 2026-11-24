@@ -156,6 +156,8 @@ class AiService:
         self.runs = ChatRuns()
         self.dispatcher = GalaxyDispatcher(directory, authorize)
         self.tool_prompts = ToolPrompts(directory)
+        from .personal_prompt import PersonalPrompt
+        self.personal_prompts = PersonalPrompt(self.dispatcher.files, self.config)
         self.advanced_settings = self._read_advanced()
         self.dispatcher.output_limit = self.advanced_settings['tool_output_mb'] * 1024 * 1024
         self.context_policy = ContextPolicy.from_values(self.advanced_settings)
@@ -583,7 +585,7 @@ class AiService:
             for key, value in {'current_time': now_local.strftime('%Y-%m-%d %H:%M:%S'),
                 'today': now_local.date().isoformat(), 'yesterday': (now_local.date() - dt.timedelta(days=1)).isoformat()}.items():
                 prompt = prompt.replace('{{' + key + '}}', value)
-            messages = ([{"role": "system", "content": prompt}] if prompt else []) + self.tool_prompts.messages(user, COMMAND_PERMISSIONS) + [{"role": "user", "content": model_content}]
+            messages = ([{"role": "system", "content": prompt}] if prompt else []) + self.personal_prompts.messages(user) + self.tool_prompts.messages(user, COMMAND_PERMISSIONS) + [{"role": "user", "content": model_content}]
             messages.insert(-1, {'role':'system','content': '当前客户端支持底部选择框。需要用户选择关键条件时，必须通过 galaxy_cli 调用 interaction.ask，不能只在正文列出选项；只询问实际缺少的信息。' if body.interactive_questions else '当前客户端不支持底部选择框。需要澄清时直接用文字提问并结束本轮，等待用户下一条回复；不能自行确定店铺或范围。'})
             if channel_context is not None and entry_point == 'feishu':
                 messages.insert(-1, {'role':'system','content':

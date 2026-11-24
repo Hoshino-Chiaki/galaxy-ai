@@ -139,7 +139,22 @@ def account_cache(owner):
     return cache
 
 
-def jail_arguments(stage, broker, token, library=None, cache=None):
+def account_prompts(owner):
+    if os.environ.get('GALAXY_ACCOUNT_STORAGE') != 'files-v1':
+        raise ValueError('Personal prompts require account storage')
+    library = scope_root(owner).parent.parent / 'prompts' / 'library'
+    descriptor = os.open('/', os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        for part in library.parts[1:]:
+            child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=descriptor)
+            os.close(descriptor)
+            descriptor = child
+    finally:
+        os.close(descriptor)
+    return library
+
+
+def jail_arguments(stage, broker, token, library=None, cache=None, prompts=None):
     args = ['/usr/bin/bwrap', '--unshare-all', '--unshare-user', '--die-with-parent', '--new-session',
             '--disable-userns', '--cap-drop', 'ALL', '--uid', '0', '--gid', '0',
             '--ro-bind', '/usr', '/usr', '--tmpfs', '/usr/local',
@@ -155,6 +170,8 @@ def jail_arguments(stage, broker, token, library=None, cache=None):
         args += ['--ro-bind', str(library), '/account-files']
     if cache is not None:
         args += ['--ro-bind', str(cache), '/account-cache']
+    if prompts is not None:
+        args += ['--ro-bind', str(prompts), '/account-prompts']
     environment = {'PATH': '/runtime/bin:/runtime/venv/bin:/usr/bin:/bin', 'HOME': '/state',
         'LANG': 'C.UTF-8', 'PYTHONNOUSERSITE': '1', 'PYTHONDONTWRITEBYTECODE': '1',
         'GALAXY_RUN_TOKEN': token, 'NODE_OPTIONS': '--max-old-space-size=256'}
@@ -205,7 +222,8 @@ async def run_job(body, reader, writer):
         await send(writer, {'type': 'ready'})
         library = account_library(owner) if body.get('account_files') is True else None
         cache = account_cache(owner) if body.get('account_cache') is True else None
-        process = await asyncio.create_subprocess_exec(*jail_arguments(stage, broker, body['token'], library, cache),
+        prompts = account_prompts(owner) if body.get('account_prompts') is True else None
+        process = await asyncio.create_subprocess_exec(*jail_arguments(stage, broker, body['token'], library, cache, prompts),
             stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
             start_new_session=True, limit=1024 * 1024)
         process.stdin.write(json.dumps(body['input'], ensure_ascii=False).encode())

@@ -5,15 +5,18 @@ import ToolPrompts from './ToolPrompts'
 import DeepseekBalance from './components/DeepseekBalance'
 import AdvancedSettings from './components/AdvancedSettings'
 import StorageSettings from './components/StorageSettings'
+import PersonalPrompt from './components/PersonalPrompt'
 import { service } from './service'
 import './console.css'
 
 type ProviderForm = { id?: string; name: string; base_url: string; api_key: string; model: string; max_tokens: number | null; enabled: boolean }
 const blankProvider = (): ProviderForm => ({ name: '', base_url: '', api_key: '', model: '', max_tokens: null, enabled: true })
 
-export default function AdminConsole() {
+export default function AdminConsole({ personalOnly = false, canPersonalPrompt = false }: { personalOnly?: boolean; canPersonalPrompt?: boolean }) {
   const [config, setConfig] = useState<AiSettings | null>(null)
-  const [aiTab, setAiTab] = useState<'models' | 'prompt' | 'tools' | 'tool-prompts' | 'advanced' | 'storage'>('models')
+  type AiTab = 'models' | 'prompt' | 'personal' | 'tools' | 'tool-prompts' | 'advanced' | 'storage'
+  const [aiTab, setAiTab] = useState<AiTab>(personalOnly ? 'personal' : 'models')
+  const tabs: AiTab[] = [...(!personalOnly ? ['models', 'prompt'] as const : []), ...(canPersonalPrompt ? ['personal'] as const : []), ...(!personalOnly ? ['tools', 'tool-prompts', 'advanced', 'storage'] as const : [])]
   const [prompt, setPrompt] = useState('')
   const [form, setForm] = useState<ProviderForm | null>(null)
   const [showKey, setShowKey] = useState(false)
@@ -38,9 +41,9 @@ export default function AdminConsole() {
 
   useEffect(() => {
     alive.current = true
-    void load(true).catch(() => { if (alive.current) setError('无法读取 AI 配置，请重新进入控制台。') })
+    if (!personalOnly) void load(true).catch(() => { if (alive.current) setError('无法读取 AI 配置，请重新进入控制台。') })
     return () => { alive.current = false }
-  }, [])
+  }, [personalOnly])
 
   useEffect(() => {
     if (!form) return
@@ -108,22 +111,23 @@ export default function AdminConsole() {
     finally { if (alive.current) setSavingPrompt(false) }
   }
 
-  return <section className="console-panel" aria-label="管理员控制台">
+  return <section className="console-panel" aria-label="AI 设置">
     <div className="console-scroll">
       <div className="console-body">
 
         <div className="console-tabs" role="tablist" aria-label="AI 配置分类" onKeyDown={event => {
           if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
           event.preventDefault()
-          const tabs = ['models', 'prompt', 'tools', 'tool-prompts', 'advanced', 'storage'] as const
           const next = tabs[(tabs.indexOf(aiTab) + (event.key === 'ArrowLeft' ? tabs.length - 1 : 1)) % tabs.length]
           setAiTab(next); setSuccess(''); setError('')
           document.getElementById(`ai-tab-${next}`)?.focus()
         }}>
-          <button id="ai-tab-models" type="button" role="tab" aria-selected={aiTab === 'models'} aria-controls="ai-model-panel" tabIndex={aiTab === 'models' ? 0 : -1}
+          {!personalOnly && <><button id="ai-tab-models" type="button" role="tab" aria-selected={aiTab === 'models'} aria-controls="ai-model-panel" tabIndex={aiTab === 'models' ? 0 : -1}
             onClick={() => { setAiTab('models'); setSuccess(''); setError('') }}><Cpu size={14} />AI 模型</button>
           <button id="ai-tab-prompt" type="button" role="tab" aria-selected={aiTab === 'prompt'} aria-controls="ai-prompt-panel" tabIndex={aiTab === 'prompt' ? 0 : -1}
-            onClick={() => { setAiTab('prompt'); setSuccess(''); setError('') }}><Pencil size={13} />全局提示词</button>
+            onClick={() => { setAiTab('prompt'); setSuccess(''); setError('') }}><Pencil size={13} />全局提示词</button></>}
+          {canPersonalPrompt && <button id="ai-tab-personal" type="button" role="tab" aria-selected={aiTab === 'personal'} aria-controls="ai-personal-panel" tabIndex={aiTab === 'personal' ? 0 : -1} onClick={() => { setAiTab('personal'); setSuccess(''); setError('') }}><Pencil size={13} />提示词</button>}
+          {!personalOnly && <>
           <button id="ai-tab-tools" type="button" role="tab" aria-selected={aiTab === 'tools'} aria-controls="ai-tools-panel" tabIndex={aiTab === 'tools' ? 0 : -1}
             onClick={() => { setAiTab('tools'); setSuccess(''); setError('') }}><TerminalSquare size={14} />工具列表</button>
           <button id="ai-tab-tool-prompts" type="button" role="tab" aria-selected={aiTab === 'tool-prompts'} aria-controls="ai-tool-prompts-panel" tabIndex={aiTab === 'tool-prompts' ? 0 : -1}
@@ -131,7 +135,7 @@ export default function AdminConsole() {
           <button id="ai-tab-advanced" type="button" role="tab" aria-selected={aiTab === 'advanced'} aria-controls="ai-advanced-panel" tabIndex={aiTab === 'advanced' ? 0 : -1}
             onClick={() => { setAiTab('advanced'); setSuccess(''); setError('') }}><TerminalSquare size={14} />高级设置</button>
           <button id="ai-tab-storage" type="button" role="tab" aria-selected={aiTab === 'storage'} aria-controls="ai-storage-panel" tabIndex={aiTab === 'storage' ? 0 : -1}
-            onClick={() => { setAiTab('storage'); setSuccess(''); setError('') }}><Save size={14} />文件存储</button>
+            onClick={() => { setAiTab('storage'); setSuccess(''); setError('') }}><Save size={14} />文件存储</button></>}
         </div>
         <div className="console-notification" role="status" aria-live="polite">{error ? <span className="console-error">{error}</span> : success ? <span className="console-success"><CheckCircle2 size={14} />{success}</span> : null}</div>
         {aiTab === 'models' && <section id="ai-model-panel" className="console-section" role="tabpanel" aria-labelledby="ai-tab-models">
@@ -153,6 +157,7 @@ export default function AdminConsole() {
         </section>}
 
         {aiTab === 'advanced' && <AdvancedSettings />}
+        {aiTab === 'personal' && canPersonalPrompt && <PersonalPrompt />}
         {aiTab === 'storage' && <StorageSettings />}
         {aiTab === 'tools' && <ToolsHelp />}
         {aiTab === 'tool-prompts' && <ToolPrompts />}
