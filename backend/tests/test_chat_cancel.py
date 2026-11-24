@@ -1,5 +1,7 @@
 import asyncio
 import json
+import os
+import signal
 import uuid
 from unittest.mock import AsyncMock
 
@@ -131,6 +133,47 @@ def test_external_task_cancellation_is_not_recorded_as_user_stop(setup):
         with pytest.raises(asyncio.CancelledError):await task
         assert not ai.running and not ai.runs.active
         assert ai.list_conversations(user)['conversations']==[]
+    asyncio.run(scenario())
+
+
+def test_cancel_during_cli_spawn_reaps_child_before_acknowledging(setup, tmp_path):
+    app, _, admin, _, _ = setup
+    ai = app.state.ai;ai.save_provider(ProviderInput(**PROVIDER));user = identities(app, admin)
+    executable = tmp_path / 'spawn-fixture'
+    executable.write_text('#!/usr/bin/python3\nimport time\ntime.sleep(60)\n')
+    executable.chmod(0o700);ai.dispatcher.executable = executable
+    ai._model_message = AsyncMock(return_value=({'role': 'assistant', 'content': None, 'tool_calls': [{
+        'id': 'spawn', 'type': 'function', 'function': {'name': 'galaxy_cli', 'arguments': '{"args":["help"]}'}}]}, {}, ''))
+    async def scenario():
+        started, release = asyncio.Event(), asyncio.Event()
+        spawn = asyncio.create_subprocess_exec
+        processes = []
+        async def delayed(*args, **kwargs):
+            process = await spawn(*args, **kwargs)
+            processes.append(process)
+            started.set()
+            await release.wait()
+            return process
+        from unittest.mock import patch
+        request_id = uuid.uuid4()
+        with patch('asyncio.create_subprocess_exec', side_effect=delayed):
+            task = asyncio.create_task(ai.send(user, ChatInput(message='stop during spawn', request_id=request_id), session_token=admin['Authorization'][7:]))
+            try:
+                await asyncio.wait_for(started.wait(), 2)
+                stopping = asyncio.create_task(ai.cancel(user, request_id))
+                await asyncio.sleep(.02)
+                assert not stopping.done(), 'stop must wait for the newly spawned process to be reaped'
+                release.set()
+                await asyncio.wait_for(stopping, 2)
+                assert (await task)['interrupted']
+                assert processes[0].returncode is not None
+                assert not ai.running and not ai.runs.active
+            finally:
+                release.set()
+                for process in processes:
+                    try:os.killpg(process.pid, signal.SIGKILL)
+                    except ProcessLookupError:pass
+                    await process.communicate()
     asyncio.run(scenario())
 
 

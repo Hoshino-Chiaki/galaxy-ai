@@ -199,6 +199,8 @@ const routes = {
   'schedule.list': () => ['GET', '/api/v1/schedule'],
   'schedule.delete': value => ['DELETE', '/api/v1/schedule/' + identifier(value.id) + '?revision=' + identifier(value.revision)],
   'guanjia.settings': () => ['GET', '/api/v1/guanjia'],
+  'jushuitan.settings': () => ['GET', '/api/v1/jushuitan'],
+  'jushuitan.login': value => ['POST', '/api/v1/jushuitan/login', value],
   'guanjia.databases': () => ['GET', '/api/v1/guanjia/databases'],
   'guanjia.login': value => ['POST', '/api/v1/guanjia/login', value],
   'profile.get': () => ['GET', '/api/v1/me/profile'],

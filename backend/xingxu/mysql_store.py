@@ -10,6 +10,7 @@ from pathlib import Path
 from .database import database
 
 TABLES = {
+    'jushuitan': {'connections': 'jushuitan_connections'},
     'guanjia': {'connections': 'guanjia_connections'},
     'ai': {'providers': 'ai_providers', 'settings': 'ai_settings'},
     'chats': {'conversations': 'chat_conversations'},

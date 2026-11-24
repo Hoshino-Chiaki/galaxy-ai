@@ -182,9 +182,11 @@ async def run_job(body, reader, writer):
     active[identifier] = stage
     process = None
     monitor = None
-    storage = scope_root(owner)
-    target = storage / conversation / identifier
+    collector = errors = None
+    target = None
     try:
+        storage = scope_root(owner)
+        target = storage / conversation / identifier
         stage.mkdir(mode=0o700)
         (stage / 'workspace').mkdir(mode=0o700)
         (stage / 'home').mkdir(mode=0o700)
@@ -241,10 +243,9 @@ async def run_job(body, reader, writer):
 
         collector = asyncio.create_task(collect())
         done, _ = await asyncio.wait([collector, monitor], timeout=900, return_when=asyncio.FIRST_COMPLETED)
-        if collector not in done:
-            collector.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await collector
+        if monitor in done or collector not in done:
+            # Kill before waiting for readers: the jail may still be producing
+            # output or waiting on a broker request that is being cancelled.
             return
         await collector
         diagnostic = await errors
@@ -267,19 +268,26 @@ async def run_job(body, reader, writer):
             result['run_id'] = identifier
         await send(writer, result)
     finally:
-        if monitor:
-            monitor.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await monitor
-        if process:
-            with contextlib.suppress(ProcessLookupError):
-                os.killpg(process.pid, signal.SIGKILL)
-            await process.wait()
-        active.pop(identifier, None)
-        if stage.exists():
-            shutil.rmtree(stage)
-        if target.exists() and not (target / 'complete').is_file():
-            shutil.rmtree(target)
+        try:
+            if process:
+                with contextlib.suppress(ProcessLookupError):
+                    os.killpg(process.pid, signal.SIGKILL)
+            tasks = [task for task in (monitor, collector, errors) if task is not None]
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            if process:
+                # wait() alone can hang after cancellation when a PIPE transport
+                # has paused reading. Drain both pipes while reaping the jail.
+                await process.communicate()
+        finally:
+            try:
+                if stage.exists():
+                    shutil.rmtree(stage)
+                if target and target.exists() and not (target / 'complete').is_file():
+                    shutil.rmtree(target)
+            finally:
+                active.pop(identifier, None)
 
 
 async def client(reader, writer):

@@ -28,7 +28,7 @@ class JsonRepository:
         self.directory = Path(directory)
         self.directory.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.directory.chmod(0o700)
-        if name not in ("auth", "ai", "chats", "tool_audit", "youzan", "files", "tool-prompts", "feishu", "uploads", "guanjia"):
+        if name not in ("auth", "ai", "chats", "tool_audit", "youzan", "files", "tool-prompts", "feishu", "uploads", "guanjia", "jushuitan"):
             raise ValueError("Unknown repository")
         self.fields = fields
         self.file = self.directory / f"{name}.json"

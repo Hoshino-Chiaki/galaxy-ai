@@ -1,6 +1,6 @@
 """The sole model-callable execution boundary: a fixed Galaxy CLI executable."""
 import asyncio
-from contextlib import nullcontext
+from contextlib import nullcontext, suppress
 import json
 import os
 import re
@@ -17,6 +17,8 @@ from .youzan.tool_runtime import is_customer_count_result
 from .feishu.tools import PERMISSIONS as FEISHU_PERMISSIONS, arguments as feishu_arguments, permissions as feishu_permissions
 from .time_tools import arguments as time_arguments
 from .guanjia.tools import arguments as gjp_arguments, redact as redact_gjp
+from .jushuitan.tools import arguments as jushuitan_arguments, redact as redact_jushuitan
+from galaxy_cli.jushuitan.orders import OUTPUT as JUSHUITAN_OUTPUT
 from galaxy_cli.gjp.schemas import OUTPUT as GJP_OUTPUT
 from galaxy_cli.tools.time.now import OUTPUT as TIME_OUTPUT
 from galaxy_cli.tools.feishu.authorized_users import OUTPUT as AUTHORIZED_USERS_OUTPUT
@@ -49,6 +51,7 @@ COMMAND_PERMISSIONS.update({'erp.' + name: 'users:manage' for name in ('employee
 COMMAND_PERMISSIONS.update({'gjp.' + name: 'guanjia:configure' for name in ('inventory', 'organizations', 'product-info')})
 COMMAND_PERMISSIONS.update({'schedule.'+name:permission for name,permission in SCHEDULE_PERMISSIONS.items()})
 COMMAND_PERMISSIONS['account.me'] = 'workspace:read'
+COMMAND_PERMISSIONS['jushuitan.order-search'] = 'jushuitan:order:read'
 COMMAND_PERMISSIONS['clawbot.send'] = 'clawbot:send'
 COMMAND_PERMISSIONS.update(FEISHU_PERMISSIONS)
 COMMAND_PERMISSIONS.update({'task.request-upload': 'task:upload', 'task.har': 'task:har:read'})
@@ -156,6 +159,9 @@ def help_arguments(raw):
     if normalized is not None:
         return normalized
     normalized = gjp_arguments(args)
+    if normalized is not None:
+        return normalized
+    normalized = jushuitan_arguments(args)
     if normalized is not None:
         return normalized
     normalized = task_arguments(args)
@@ -324,10 +330,24 @@ class GalaxyDispatcher:
             frame={'categories':{'youzan':credentials},**catalog_context,
                 'input':strict_json(arguments[arguments.index('--input')+1])}
             process_arguments=[*arguments[:arguments.index('--input')],'--input-stdin']
-        try:
-            process = await asyncio.create_subprocess_exec(str(self.executable), *process_arguments,
+        spawning = asyncio.create_task(asyncio.create_subprocess_exec(str(self.executable), *process_arguments,
                 cwd=str(home), env=environment, stdin=asyncio.subprocess.PIPE if frame is not None else asyncio.subprocess.DEVNULL,
-                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, start_new_session=True)
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, start_new_session=True))
+        try:
+            process = await asyncio.shield(spawning)
+        except asyncio.CancelledError:
+            # Cancellation can land after fork but before asyncio returns the
+            # process handle. Retain that handle and reap it before releasing
+            # the channel lock; cancelling the spawn coroutine can orphan it.
+            try:
+                process = await spawning
+            except OSError:
+                pass
+            else:
+                with suppress(ProcessLookupError):
+                    os.killpg(process.pid, signal.SIGKILL)
+                await process.communicate()
+            raise
         except OSError:
             raise DispatchDenied("cli_unavailable", "Galaxy CLI 无法启动。") from None
         total = 0
@@ -358,10 +378,13 @@ class GalaxyDispatcher:
                 process.stdin.write(json.dumps(frame, ensure_ascii=False).encode())
                 await process.stdin.drain()
                 process.stdin.close()
+        io_tasks = [asyncio.create_task(coroutine) for coroutine in (
+            read(process.stdout), read(process.stderr), process.wait(), supply())]
+        readers = asyncio.gather(*io_tasks)
         try:
             stdout, _stderr, return_code, _ = await asyncio.wait_for(
-                asyncio.gather(read(process.stdout), read(process.stderr), process.wait(), supply()),
-                timeout=None if all_order_pages else 180 if catalog_context is not None else 40 if file_context is not None else self.timeout if credentials is None else 180 if arguments[0] == 'feishu' else 90 if arguments[:2] == ['youzan', 'business-report'] else 60 if arguments[:2] == ["youzan", "customer-get"] else 40)
+                readers,
+                timeout=None if all_order_pages else 180 if catalog_context is not None else 40 if file_context is not None else self.timeout if credentials is None else 180 if arguments[0] == 'feishu' else 90 if arguments[0] == 'jushuitan' else 90 if arguments[:2] == ['youzan', 'business-report'] else 60 if arguments[:2] == ["youzan", "customer-get"] else 40)
             try:
                 result = (await asyncio.to_thread(strict_json, stdout.decode('utf-8')) if len(stdout) > 256 * 1024
                           else strict_json(stdout.decode('utf-8')))
@@ -375,6 +398,14 @@ class GalaxyDispatcher:
                     if isinstance(error.get('code'), str) and isinstance(error.get('message'), str):
                         return redact_gjp({'error': {'code': error['code'][:80], 'message': error['message'][:800]}}, credentials)
                 raise DispatchDenied('invalid_cli_output', '管家婆工具返回结构无效。')
+            if arguments[0] == 'jushuitan':
+                if return_code == 0 and Draft202012Validator(JUSHUITAN_OUTPUT).is_valid(result):
+                    return redact_jushuitan(result, credentials)
+                if isinstance(result, dict) and isinstance(result.get('error'), dict):
+                    error = result['error']
+                    if isinstance(error.get('code'), str) and isinstance(error.get('message'), str):
+                        return redact_jushuitan({'error': {'code': error['code'][:80], 'message': error['message'][:800]}}, credentials)
+                raise DispatchDenied('invalid_cli_output', '聚水潭工具返回结构无效。')
             if arguments[:2] == ['time', 'now'] and return_code == 0 and Draft202012Validator(TIME_OUTPUT).is_valid(result):
                 return result
             if arguments[:2] == ['feishu','authorized-users'] and return_code == 0 and Draft202012Validator(AUTHORIZED_USERS_OUTPUT).is_valid(result):
@@ -419,7 +450,14 @@ class GalaxyDispatcher:
                 os.killpg(process.pid, signal.SIGKILL)
             except ProcessLookupError:
                 pass
-            await process.wait()
+            readers.cancel()
+            for task in io_tasks:
+                task.cancel()
+            await asyncio.gather(readers, *io_tasks, return_exceptions=True)
+            # A cancelled reader can leave stdout/stderr transport backpressure
+            # engaged. Drain pipes as well as reaping the process before the
+            # channel/session lock is released.
+            await process.communicate()
 
     async def execute(self, context, call, *, interaction=None):
         started = time.monotonic()
@@ -441,7 +479,7 @@ class GalaxyDispatcher:
             if call["type"] != "function" or call["function"]["name"] != "galaxy_cli":
                 raise DispatchDenied("tool_denied", "AI 仅允许调用 galaxy_cli。")
             canonical, scope = scoped_arguments(call["function"]["arguments"])
-            command = ".".join(canonical[:2]) if canonical[0] in ('youzan', 'feishu', 'excel', 'file', 'time', 'task', 'erp', 'gjp', 'interaction', 'schedule', 'clawbot', 'account') else "help"
+            command = ".".join(canonical[:2]) if canonical[0] in ('youzan', 'feishu', 'excel', 'file', 'time', 'task', 'erp', 'gjp', 'jushuitan', 'interaction', 'schedule', 'clawbot', 'account') else "help"
             if context.background_run and (command.startswith('schedule.') or command in ('interaction.ask','task.request-upload')):
                 raise DispatchDenied('scheduled_input_required','定时任务无人值守，不能等待输入或修改调度；请明确说明缺少的资料。')
             if scope is not None and not command.startswith('youzan.'):
@@ -531,6 +569,8 @@ class GalaxyDispatcher:
                             self.files.cleanup_publication(publication_id, relative, user)
                 elif command.startswith('gjp.'):
                     result = await self._gjp_run(context, command, canonical)
+                elif command.startswith('jushuitan.'):
+                    result = await self._jushuitan_run(context, command, canonical)
                 elif command.startswith('feishu.'):
                     result = await self._feishu_run(context, command, canonical)
                 else:
@@ -576,6 +616,23 @@ class GalaxyDispatcher:
 
     async def _single_youzan(self, context, command, canonical):
         return await run_single(self, context, command, canonical)
+
+    async def _jushuitan_run(self, context, command, canonical):
+        provider = getattr(self, 'jushuitan_provider', None)
+        if provider is None:
+            raise DispatchDenied('jushuitan_login_required', '请先在“我的账号 → 聚水潭”登录。')
+        user = self._check_command(context, command, canonical)
+        try:
+            async with provider.operation_guard(user):
+                user = self._check_command(context, command, canonical)
+                credentials = provider.credentials(user)
+                result = await self._run(canonical, user, credentials=credentials)
+                user = self._check_command(context, command, canonical)
+                if provider.credentials(user) != credentials:
+                    raise DispatchDenied('connection_changed', '聚水潭登录已变化，请重新查询。')
+                return result
+        except AuthFailure as error:
+            raise DispatchDenied(error.code, error.message) from None
 
     async def _gjp_run(self, context, command, canonical):
         if self.gjp_provider is None:

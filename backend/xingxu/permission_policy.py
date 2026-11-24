@@ -4,7 +4,7 @@ from .mysql_store import load_json
 
 PROTECTED = {'workspace:read', 'galaxy:help', 'tools:galaxy_cli'}
 ADMIN_PROTECTED = {'permissions:manage', 'users:manage'}
-CHANNELS = ('youzan', 'feishu', 'guanjia', 'clawbot')
+CHANNELS = ('youzan', 'feishu', 'guanjia', 'clawbot', 'jushuitan')
 LABELS = {
  'ai:usage:read':'查看员工 AI 用量统计',
  'ai:chat':'使用 AI 对话', 'ai:configure':'管理模型、提示词与工具配置',
@@ -21,8 +21,9 @@ LABELS = {
  'clawbot:send':'发送文字与文件到本人微信',
  'clawbot:configure':'绑定并使用本人的微信 ClawBot',
  'guanjia:configure':'连接管家婆并查询 ERP 数据',
+ 'jushuitan:order:read':'读取聚水潭供应链订单',
 }
-GROUPS = [('ai','AI'),('schedule','任务调度（实验）'),('youzan','有赞'),('feishu','飞书'),('guanjia','管家婆'),('clawbot','ClawBot'),('erp','ERP'),('files','文件与附件')]
+GROUPS = [('ai','AI'),('schedule','任务调度（实验）'),('youzan','有赞'),('feishu','飞书'),('guanjia','管家婆'),('jushuitan','聚水潭'),('clawbot','ClawBot'),('erp','ERP'),('files','文件与附件')]
 
 
 def catalog():
@@ -42,7 +43,7 @@ def action(code):
 
 
 def group(code):
-    if code.startswith(('schedule:', 'ai:', 'youzan:', 'feishu:', 'guanjia:', 'clawbot:')): return code.split(':')[0]
+    if code.startswith(('schedule:', 'ai:', 'youzan:', 'feishu:', 'guanjia:', 'clawbot:', 'jushuitan:')): return code.split(':')[0]
     return 'erp' if code=='users:manage' else 'files'
 
 
@@ -50,7 +51,7 @@ def normalize(permissions):
     result=set(permissions)
     result.discard('feishu:write')
     if result & {'feishu:create','feishu:delete','feishu:update'}: result.add('feishu:write')
-    for channel in ('youzan','feishu'):
+    for channel in ('youzan','feishu','jushuitan'):
         config=channel+':configure'
         if any(p.startswith(channel+':') and p!=config for p in result):result.add(config)
         else:result.discard(config)

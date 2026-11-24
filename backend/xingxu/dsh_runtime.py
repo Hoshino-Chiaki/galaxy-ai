@@ -103,6 +103,7 @@ class DshTurn:
             progress.update(events=self.events, reasoning=self.reasoning, usage=self.usage)
         self.identifier, self.token = str(uuid.uuid4()), secrets.token_hex(32)
         self.connections, self.clients, self.model_calls = set(), set(), 0
+        self.closing = False
         self.network_bytes = 0
         self.network_calls = 0
         self.materialized_bytes = 0
@@ -113,6 +114,8 @@ class DshTurn:
         self.native = endpoint.scheme == 'https' and endpoint.hostname == 'api.deepseek.com' and endpoint.path in ('', '/v1', '/chat/completions')
 
     def principal(self):
+        if self.closing or self.run is not None and self.run.stop_requested:
+            raise AuthFailure('request_ended', '当前聊天请求已停止。', 409)
         try:
             user = self.ai.dispatcher._principal(self.context)
             if 'ai:chat' not in user['permissions']:
@@ -483,7 +486,7 @@ class DshTurn:
         directory = root / self.identifier
         directory.mkdir(mode=0o700)
         server = None
-        writer = None
+        reader = writer = None
         try:
             server = await asyncio.start_unix_server(self.handle, str(directory / 'broker.sock'), limit=16384)
             (directory / 'broker.sock').chmod(0o600)
@@ -549,20 +552,35 @@ class DshTurn:
         except (OSError, ValueError, asyncio.TimeoutError):
             raise AuthFailure('dsh_unavailable', 'DSH 运行环境暂不可用，本轮没有自动切换到其他执行器。', 503) from None
         finally:
-            if writer:
-                writer.close()
-                with contextlib.suppress(OSError):
-                    await writer.wait_closed()
+            self.closing = True
             if server:
                 server.close()
-            tasks = list(self.connections)
-            for client in list(self.clients):
-                client.close()
-            for task in tasks:
-                task.cancel()
-            if tasks:
-                await asyncio.gather(*tasks, return_exceptions=True)
-            if server:
-                await server.wait_closed()
-            (directory / 'broker.sock').unlink(missing_ok=True)
-            directory.rmdir()
+            # Half-close signals the worker to kill its jail, while keeping the
+            # read side open until the worker has completed its cleanup. A full
+            # close alone used to report "stopped" before resources were freed.
+            if writer:
+                with contextlib.suppress(OSError):
+                    writer.write_eof()
+            try:
+                tasks = list(self.connections)
+                for client in list(self.clients):
+                    client.close()
+                for task in tasks:
+                    task.cancel()
+                if tasks:
+                    await asyncio.gather(*tasks, return_exceptions=True)
+                if reader:
+                    async with asyncio.timeout(15):
+                        while await reader.read(65536):
+                            pass
+            except asyncio.TimeoutError:
+                raise AuthFailure('dsh_stop_timeout', '执行器尚未确认资源释放，请稍后重试。', 503) from None
+            finally:
+                if writer:
+                    writer.close()
+                    with contextlib.suppress(OSError):
+                        await writer.wait_closed()
+                if server:
+                    await server.wait_closed()
+                (directory / 'broker.sock').unlink(missing_ok=True)
+                directory.rmdir()

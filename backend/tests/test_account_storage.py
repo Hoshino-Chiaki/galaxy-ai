@@ -136,7 +136,7 @@ def test_symlink_and_hardlink_rejected(users, tmp_path):
     assert outside.read_text() == 'sensitive'
 
 
-@pytest.mark.parametrize('name', ['youzan', 'feishu', 'guanjia'])
+@pytest.mark.parametrize('name', ['youzan', 'feishu', 'guanjia', 'jushuitan'])
 def test_personal_channels_are_per_account_and_company_apps_stay_shared(users, tmp_path, name):
     first, second = users
     fields = ('apps', 'connections') if name == 'feishu' else ('connections',)

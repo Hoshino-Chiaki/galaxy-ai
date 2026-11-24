@@ -22,6 +22,8 @@ from .store import JsonRepository
 from .ai import AiService, ProviderInput, PromptInput, DefaultInput, AdvancedInput, ChatInput
 from .guanjia import GuanjiaService
 from .guanjia.routes import create_router as guanjia_router
+from .jushuitan import JushuitanService
+from .jushuitan.routes import create_router as jushuitan_router
 from .youzan import YouzanService
 from .youzan.routes import create_router as youzan_router
 from .feishu import FeishuService
@@ -100,6 +102,9 @@ def create_app(data_dir=None, policy=None, ai_transport=None, youzan_transport=N
     guanjia = GuanjiaService(directory, ai.cipher)
     application.state.guanjia = guanjia
     ai.dispatcher.gjp_provider = guanjia
+    jushuitan = JushuitanService(directory, ai.cipher)
+    application.state.jushuitan = jushuitan
+    ai.dispatcher.jushuitan_provider = jushuitan
     youzan = YouzanService(directory, ai.cipher, transport=youzan_transport,
                           login_runner=youzan_login_runner, authorize=service.identity)
     application.state.youzan = youzan
@@ -120,7 +125,7 @@ def create_app(data_dir=None, policy=None, ai_transport=None, youzan_transport=N
     clawbot = ClawbotService(directory, service, ai, transport=clawbot_transport)
     application.state.clawbot = clawbot
     ai.dispatcher.clawbot_provider = clawbot
-    ai.dispatcher.account_provider = AccountInfo(youzan=youzan, feishu=feishu, guanjia=guanjia, clawbot=clawbot)
+    ai.dispatcher.account_provider = AccountInfo(youzan=youzan, feishu=feishu, guanjia=guanjia, jushuitan=jushuitan, clawbot=clawbot)
     ai.dispatcher.schedule_provider = schedules
 
     @asynccontextmanager
@@ -193,6 +198,7 @@ def create_app(data_dir=None, policy=None, ai_transport=None, youzan_transport=N
 
 
     application.include_router(guanjia_router(guanjia, identity))
+    application.include_router(jushuitan_router(jushuitan, identity))
     application.include_router(youzan_router(youzan, identity, token))
     application.include_router(feishu_router(feishu, identity, token))
     application.include_router(updates_router())

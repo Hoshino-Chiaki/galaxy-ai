@@ -1,6 +1,6 @@
 """Category metadata shared by the registry and server-side prompt settings."""
 
-CATEGORY_LABELS = {'account':'我的账号', 'clawbot':'ClawBot 微信', 'schedule':'任务调度（实验）', 'task': '任务系统', 'erp': 'ERP', 'interaction': '交互'}
+CATEGORY_LABELS = {'account':'我的账号', 'clawbot':'ClawBot 微信', 'schedule':'任务调度（实验）', 'task': '任务系统', 'erp': 'ERP', 'interaction': '交互', 'jushuitan': '聚水潭'}
 TASK_SYSTEM_PROMPT = '''你负责为执行各大平台自动化任务制定方案、收集必要资料、分析接口并在授权范围内验证执行。先理解目标，再确定需要哪些平台和多少份文件，不让用户替你设计技术流程。
 
 一、先制定任务方案

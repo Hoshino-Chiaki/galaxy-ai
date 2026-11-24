@@ -5,6 +5,7 @@ import AdminConsole from './AdminConsole'
 import YouzanSettingsPanel from './YouzanSettings'
 import GuanjiaSettings from './GuanjiaSettings'
 import FeishuSettings from './FeishuSettings'
+import JushuitanSettings from './JushuitanSettings'
 import ClawbotSettings from './ClawbotSettings'
 import AboutGalaxy from './components/AboutGalaxy'
 import PersonnelManagement from './components/PersonnelManagement'
@@ -20,7 +21,7 @@ import './workspace-shell.css'
 type Props = { user: CurrentUser; onLogout: () => Promise<void>; signingOut: boolean; error: string; onProfileChange: (profile: PersonalProfile) => void }
 
 export default function Workspace({ user, onLogout, signingOut, error, onProfileChange }: Props) {
-  const [module, setModule] = useState<'ai' | 'ai-settings' | 'console-youzan' | 'console-feishu' | 'console-guanjia' | 'console-clawbot' | 'pool-feishu' | 'erp-personnel' | 'erp-ai-usage' | 'schedule' | 'about' | 'files-library' | 'files-published'>('ai')
+  const [module, setModule] = useState<'ai' | 'ai-settings' | 'console-youzan' | 'console-feishu' | 'console-guanjia' | 'console-jushuitan' | 'console-clawbot' | 'pool-feishu' | 'erp-personnel' | 'erp-ai-usage' | 'schedule' | 'about' | 'files-library' | 'files-published'>('ai')
   const [scheduleIntent, setScheduleIntent] = useState<ScheduleIntent | null>(null)
   function scheduleChat(intent: ScheduleIntent) { setScheduleIntent(intent); setModule('ai') }
   const [consoleOpen, setConsoleOpen] = useState(false)
@@ -75,15 +76,16 @@ export default function Workspace({ user, onLogout, signingOut, error, onProfile
         {user.permissions.includes('schedule:read') && <button type="button" className={`nav-item${module === 'schedule' ? ' active' : ''}`} aria-label="任务调度" aria-current={module === 'schedule' ? 'page' : undefined} onClick={() => setModule('schedule')}><span className="nav-icon"><CalendarClock size={16} /></span><span className="nav-label">任务调度</span><small className="schedule-experiment">实验</small></button>}
         {canConfigure && <button type="button" className={`nav-item${module === 'ai-settings' ? ' active' : ''}`} onClick={() => setModule('ai-settings')} aria-label="AI 设置">
           <span className="nav-icon"><Cpu size={16} /></span><span className="nav-label">AI 设置</span></button>}
-        {(hasChannel('youzan') || hasChannel('feishu') || hasChannel('guanjia') || hasChannel('clawbot')) && <>
+        {(hasChannel('youzan') || hasChannel('feishu') || hasChannel('guanjia') || hasChannel('jushuitan') || hasChannel('clawbot')) && <>
           <button type="button" className={`nav-item console-nav${module.startsWith('console-') ? ' console-active' : ''}`} aria-label="我的账号" title="我的账号" aria-expanded={consoleOpen}
-            onClick={() => { setConsoleOpen(value => !value); if (!consoleOpen) setModule(hasChannel('youzan') ? 'console-youzan' : hasChannel('feishu') ? 'console-feishu' : hasChannel('guanjia') ? 'console-guanjia' : 'console-clawbot') }}>
+            onClick={() => { setConsoleOpen(value => !value); if (!consoleOpen) setModule(hasChannel('youzan') ? 'console-youzan' : hasChannel('feishu') ? 'console-feishu' : hasChannel('guanjia') ? 'console-guanjia' : hasChannel('jushuitan') ? 'console-jushuitan' : 'console-clawbot') }}>
             <span className="nav-icon"><SlidersHorizontal size={16} strokeWidth={1.6} /></span><span className="nav-label">我的账号</span><ChevronDown size={12} className={consoleOpen ? 'chevron open' : 'chevron'} />
           </button>
           {consoleOpen && <div className="console-subnav">
             {hasChannel('youzan') && <button type="button" className={module === 'console-youzan' ? 'selected' : ''} onClick={() => setModule('console-youzan')} aria-label="我的账号 有赞"><Link2 size={13} /><span className="subnav-label">有赞</span></button>}
             {hasChannel('feishu') && <button type="button" className={module === 'console-feishu' ? 'selected' : ''} onClick={() => setModule('console-feishu')} aria-label="我的账号 飞书"><Link2 size={13} /><span className="subnav-label">飞书</span></button>}
             {hasChannel('guanjia') && <button type="button" className={module === 'console-guanjia' ? 'selected' : ''} onClick={() => setModule('console-guanjia')} aria-label="我的账号 管家婆"><Link2 size={13} /><span className="subnav-label">管家婆</span></button>}
+            {hasChannel('jushuitan') && <button type="button" className={module === 'console-jushuitan' ? 'selected' : ''} onClick={() => setModule('console-jushuitan')} aria-label="我的账号 聚水潭"><Link2 size={13} /><span className="subnav-label">聚水潭</span></button>}
             {hasChannel('clawbot') && <button type="button" className={module === 'console-clawbot' ? 'selected' : ''} onClick={() => setModule('console-clawbot')} aria-label="我的账号 ClawBot"><Link2 size={13} /><span className="subnav-label">ClawBot</span></button>}
           </div>}
         </>}
@@ -115,7 +117,7 @@ export default function Workspace({ user, onLogout, signingOut, error, onProfile
     {module === 'about' && <AboutGalaxy status={updates} onCheck={() => { void checkUpdate() }} onInstall={() => { void installUpdate() }} />}
     {canConfigure && module === 'ai-settings' && <AdminConsole />}
     {module.startsWith('console-') && <section className="console-panel" aria-label="我的账号">
-      <div className="console-scroll">{module === 'console-youzan' && hasChannel('youzan') ? <YouzanSettingsPanel /> : module === 'console-clawbot' && hasChannel('clawbot') ? <ClawbotSettings /> : module === 'console-guanjia' && hasChannel('guanjia') ? <GuanjiaSettings /> : module === 'console-feishu' && hasChannel('feishu') ? <FeishuSettings key="personal" user={user} mode="personal" /> : null}</div>
+      <div className="console-scroll">{module === 'console-youzan' && hasChannel('youzan') ? <YouzanSettingsPanel /> : module === 'console-clawbot' && hasChannel('clawbot') ? <ClawbotSettings /> : module === 'console-guanjia' && hasChannel('guanjia') ? <GuanjiaSettings /> : module === 'console-jushuitan' && hasChannel('jushuitan') ? <JushuitanSettings /> : module === 'console-feishu' && hasChannel('feishu') ? <FeishuSettings key="personal" user={user} mode="personal" /> : null}</div>
     </section>}
     {module === 'pool-feishu' && user.permissions.includes('feishu:app:configure') && <section className="console-panel" aria-label="账号池飞书设置"><div className="console-scroll"><FeishuSettings key="application" user={user} mode="application" /></div></section>}
     </div>

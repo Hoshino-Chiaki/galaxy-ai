@@ -133,12 +133,73 @@ class LiveTests(unittest.IsolatedAsyncioTestCase):
             task.cancel()
             with self.assertRaises(asyncio.CancelledError):
                 await task
-        for _ in range(50):
-            if not (await worker_request({'command': 'status'})).get('active'):
-                break
-            await asyncio.sleep(.1)
+        # Cancellation must await supervisor cleanup, rather than relying on
+        # eventual cleanup after the frontend has already reported completion.
         self.assertEqual((await worker_request({'command': 'status'}))['active'], 0)
         self.assertFalse((Path('/opt/galaxy-ai/hosted-files/.dsh') / owner_key(self.context) / self.context.conversation_id / turn.identifier).exists())
+
+    async def test_cancel_running_shell_releases_worker_immediately(self):
+        count = 0
+        async def model(_provider, _wire, **_kwargs):
+            nonlocal count
+            count += 1
+            if count == 1:
+                return {'role': 'assistant', 'content': None, 'tool_calls': [{
+                    'id': 'long-shell', 'type': 'function', 'function': {'name': 'bash',
+                    'arguments': json.dumps({'command': 'python -c "from pathlib import Path;import time;Path(\'started.txt\').write_text(\'running\');time.sleep(60)"'})}}]}, {}, ''
+            raise AssertionError('model must not be called again after cancellation')
+        turn = self.turn()
+        async def prepare(wire):return wire
+        with patch.object(self.ai, '_model_message', model):
+            task = asyncio.create_task(turn.execute([{'role': 'user', 'content': 'long shell'}], prepare=prepare))
+            async with asyncio.timeout(20):
+                while True:
+                    if task.done():await task
+                    result = await worker_request({'command': 'read', 'run_id': turn.identifier, 'path': 'started.txt'})
+                    if 'data' in result:break
+                    await asyncio.sleep(.05)
+            task.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await asyncio.wait_for(task, 5)
+        self.assertEqual((await worker_request({'command': 'status'}))['active'], 0)
+        result, _wire = await self.run_command('python -c "print(6*7)"')
+        self.assertEqual(result[0], '验证完成')
+
+    async def test_stop_during_cli_reaps_process_and_releases_channel_lock(self):
+        self.ai.runtime_name = 'dsh'
+        self.ai.snapshot = lambda: ({**self.provider, 'name': 'Synthetic DSH'}, '测试打断。')
+        marker = Path(self.folder.name) / 'cli-started'
+        executable = Path(self.folder.name) / 'sleeping-cli'
+        executable.write_text('#!/usr/bin/python3\nimport pathlib,time\npathlib.Path(' + repr(str(marker)) + ').touch()\ntime.sleep(60)\n')
+        executable.chmod(0o700)
+        self.ai.dispatcher.executable = executable
+        lock = asyncio.Lock()
+        original = self.ai.dispatcher._run
+        interrupted = asyncio.Event()
+        async def locked(*args, **kwargs):
+            async with lock:
+                try:return await original(*args, **kwargs)
+                finally:interrupted.set()
+        async def model(*_args, **_kwargs):
+            return {'role': 'assistant', 'content': None, 'tool_calls': [{
+                'id': 'sleeping-cli', 'type': 'function', 'function': {'name': 'bash',
+                'arguments': json.dumps({'command': 'galaxy-cli help --format json'})}}]}, {}, ''
+        request_id = uuid.uuid4()
+        with patch.object(self.ai, '_model_message', model), patch.object(self.ai.dispatcher, '_run', locked):
+            task = asyncio.create_task(self.ai.send(self.user, ChatInput(message='stop CLI', request_id=request_id), session_token='synthetic'))
+            async with asyncio.timeout(20):
+                while not marker.exists():
+                    if task.done():await task
+                    await asyncio.sleep(.05)
+            await asyncio.wait_for(self.ai.cancel(self.user, request_id), 5)
+            result = await task
+        self.assertTrue(result['interrupted'])
+        self.assertTrue(interrupted.is_set())
+        self.assertFalse(lock.locked())
+        self.assertFalse(self.ai.running)
+        self.assertFalse(self.ai.runs.active)
+        self.assertEqual(result['conversation']['messages'][-1]['tool_events'][-1]['status'], 'cancelled')
+        self.assertEqual((await worker_request({'command': 'status'}))['active'], 0)
 
     async def test_chat_commit_upload_materialization_and_har_continuation(self):
         from test_uploads import har_bytes

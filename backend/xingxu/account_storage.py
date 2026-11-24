@@ -13,11 +13,12 @@ from urllib.parse import quote
 
 
 MODE = 'files-v1'
-PERSONAL = {'chats', 'youzan', 'feishu', 'guanjia', 'files', 'uploads', 'tool_audit'}
+PERSONAL = {'chats', 'youzan', 'feishu', 'guanjia', 'jushuitan', 'files', 'uploads', 'tool_audit'}
 LOCATIONS = {
     'youzan': 'channels/youzan/connection.json',
     'feishu': 'channels/feishu/connection.json',
     'guanjia': 'channels/guanjia/connection.json',
+    'jushuitan': 'channels/jushuitan/connection.json',
     'files': 'files/metadata.json',
     'uploads': 'uploads/requests.json',
     'tool_audit': 'logs/tool-audit.json',
@@ -177,7 +178,7 @@ class AccountRepository:
     """
     def __init__(self, directory, name, fields):
         expected = {'chats': ('conversations',), 'youzan': ('connections',),
-                    'guanjia': ('connections',), 'feishu': ('apps', 'connections'),
+                    'guanjia': ('connections',), 'jushuitan': ('connections',), 'feishu': ('apps', 'connections'),
                     'files': ('files',), 'uploads': ('requests',), 'tool_audit': ('records',)}
         if name not in expected or set(fields) != set(expected[name]):
             raise ValueError('Unknown account repository')

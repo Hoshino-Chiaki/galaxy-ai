@@ -32,7 +32,7 @@ ROLES['admin'].append(COMPANY_ATTENDANCE_READ)
 ROLES['admin'].append('youzan:renew:configure')
 ROLES['admin'].append('permissions:manage')
 ROLES['admin'].append('ai:usage:read')
-for role in ROLES.values():role.extend(['clawbot:configure','clawbot:send'])
+for role in ROLES.values():role.extend(['clawbot:configure','clawbot:send', 'jushuitan:configure', 'jushuitan:order:read'])
 for role in ROLES.values():role.extend(['schedule:create','schedule:read','schedule:update','schedule:delete'])
 
 

@@ -51,7 +51,7 @@ class AccountInfo:
                     info = {'account': (value.get('identity') or {}).get('name', ''),
                         'status': 'not_configured' if not value['configured'] else 'not_connected' if not value['connected']
                             else 'connected'}
-                elif name == 'guanjia':
+                elif name in ('guanjia', 'jushuitan'):
                     info = {'account': value.get('account', ''), 'status': 'connected' if value['connected'] else 'not_connected'}
                 elif name == 'clawbot':
                     info = {'account': value.get('bot_id', ''), 'status': value.get('status', 'disconnected')}
