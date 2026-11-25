@@ -37,7 +37,7 @@ def main(argv=None):
         parser.add_argument("--version", action="store_true")
         args = parser.parse_args(argv)
         if args.input_stdin:
-            supported = (args.command == 'excel' and args.target == 'create' or args.command == 'excel.create'
+            supported = (args.command == 'excel' and args.target in ('create', 'inspect', 'transform') or args.command in ('excel.create', 'excel.inspect', 'excel.transform')
                 or args.command == 'file' and args.target == 'publish' or args.command == 'file.publish'
                 or args.command == 'youzan' and args.target in NAMES or args.command in {'youzan.'+name for name in NAMES}
                 or args.command == 'task' and args.target == 'har' or args.command == 'task.har'

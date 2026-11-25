@@ -7,7 +7,7 @@ name = "galaxy-cli"
 version = "0.1.0"
 description = "Galaxy command-line tools with a discoverable input/output registry"
 requires-python = ">=3.11"
-dependencies = ["jsonschema>=4.23,<5", "XlsxWriter>=3.2,<4", "Pillow==13.0.0", "haralyzer==2.4.0", "pymssql==2.4.6", "openpyxl==3.1.5"]
+dependencies = ["jsonschema>=4.23,<5", "XlsxWriter>=3.2,<4", "Pillow==13.0.0", "haralyzer==2.4.0", "pymssql==2.4.6", "openpyxl==3.1.5", "pandas>=2.2,<4", "python-calamine>=0.3,<1"]
 
 [project.scripts]
 galaxy-cli = "galaxy_cli.cli:main"
@@ -17,4 +17,4 @@ galax-cli = "galaxy_cli.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-galaxy_cli = ["feishu_catalog.json", "gjp/*.json"]
+galaxy_cli = ["feishu_catalog.json", "gjp/*.json", "excel/vendor/*.txt", "excel/vendor/*.md"]

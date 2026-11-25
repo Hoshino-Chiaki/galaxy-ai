@@ -16,7 +16,7 @@ from .tool_context import DispatchDenied, strict_json
 
 # These are protocol/control responses consumed directly by the UI or agent.
 # Business tools default to file receipts; new platforms do not need an allowlist.
-INLINE = {'help', 'time.now', 'interaction.ask', 'task.request-upload', 'excel.create', 'file.publish'}
+INLINE = {'help', 'time.now', 'interaction.ask', 'task.request-upload', 'excel.create', 'excel.inspect', 'excel.transform', 'file.publish'}
 PRIVATE = re.compile(r'password|secret|cookie|authorization|access_token|refresh_token|credential|csrf|^sid$|^headers$|^session', re.I)
 
 

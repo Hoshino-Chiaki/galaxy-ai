@@ -1,0 +1,169 @@
+"""Shared AST-based expression validator for safe math evaluation."""
+
+from __future__ import annotations
+
+import ast
+import math
+
+_DEFAULT_FORBIDDEN_NAMES: frozenset[str] = frozenset(
+    {
+        "__builtins__",
+        "__import__",
+        "exec",
+        "eval",
+        "open",
+        "system",
+        "getattr",
+        "setattr",
+        "delattr",
+        "globals",
+        "locals",
+        "compile",
+        "breakpoint",
+        "input",
+        "print",
+        "exit",
+        "quit",
+    }
+)
+
+_SAFE_NODES = (
+    ast.Expression,
+    ast.BinOp,
+    ast.UnaryOp,
+    ast.Constant,
+    ast.Name,
+    ast.Call,
+    ast.Compare,
+    ast.BoolOp,
+    ast.IfExp,
+    ast.Load,
+    ast.Store,
+    ast.Tuple,
+    ast.List,
+    ast.Add,
+    ast.Sub,
+    ast.Mult,
+    ast.Div,
+    ast.Pow,
+    ast.Mod,
+    ast.FloorDiv,
+    ast.USub,
+    ast.UAdd,
+    ast.And,
+    ast.Or,
+    ast.Gt,
+    ast.Lt,
+    ast.GtE,
+    ast.LtE,
+    ast.Eq,
+    ast.NotEq,
+)
+
+"""
+SAFE_MATH_FUNCS (dict[str, object]): Mapping of allowed math function names to
+callable implementations exposed to validated expressions.
+
+Purpose:
+    Provide a small, auditable set of math helpers (sqrt, log, sin, cos, etc.) that
+    callers can reference in expressions validated by `validate_expression`.
+
+Typical entries:
+    'sqrt', 'log', 'log10', 'exp', 'sin', 'cos', 'tan', 'abs', 'pow'
+"""
+SAFE_MATH_FUNCS: dict[str, object] = {
+    "sqrt": math.sqrt,
+    "log": math.log,
+    "log10": math.log10,
+    "exp": math.exp,
+    "sin": math.sin,
+    "cos": math.cos,
+    "tan": math.tan,
+    "abs": abs,
+    "pow": pow,
+}
+
+
+_MAX_EXPONENT = 1000
+
+
+def _extract_numeric_constant(expr: ast.expr) -> int | float | None:
+    """Return numeric value if *expr* is a numeric literal (with optional unary +/-)."""
+    if isinstance(expr, ast.Constant) and isinstance(expr.value, (int, float)) and not isinstance(expr.value, bool):
+        return expr.value
+    if (
+        isinstance(expr, ast.UnaryOp)
+        and isinstance(expr.op, (ast.UAdd, ast.USub))
+        and isinstance(expr.operand, ast.Constant)
+        and isinstance(expr.operand.value, (int, float))
+        and not isinstance(expr.operand.value, bool)
+    ):
+        return -expr.operand.value if isinstance(expr.op, ast.USub) else expr.operand.value
+    return None
+
+
+def validate_expression(
+    expression: str,
+    *,
+    allowed_names: frozenset[str] | None = None,
+    forbidden_names: frozenset[str] | None = None,
+) -> ast.Expression:
+    """
+    Validate a mathematical expression using AST inspection and a conservative whitelist.
+
+    Args:
+        expression (str): The expression to validate. Must be valid Python expression
+            syntax (mode='eval').
+        allowed_names (frozenset[str] | None): Optional set of variable names permitted
+            in the expression. If provided, variable references not in this set (and not
+            in `SAFE_MATH_FUNCS`) will be rejected.
+        forbidden_names (frozenset[str] | None): Optional set of names to explicitly
+            forbid; if None a default forbid-list is used (e.g. 'exec', 'eval', 'open').
+
+    Returns:
+        ast.Expression: Parsed AST expression if validation succeeds.
+
+    Raises:
+        ValueError: If the expression contains syntax errors, uses disallowed AST node
+            types, references forbidden names, includes unknown variable names, or
+            invokes disallowed functions.
+    """
+    if forbidden_names is None:
+        forbidden_names = _DEFAULT_FORBIDDEN_NAMES
+
+    try:
+        tree = ast.parse(expression, mode="eval")
+    except SyntaxError as e:
+        raise ValueError(f"Invalid expression syntax: {e}") from e
+
+    for node in ast.walk(tree):
+        if not isinstance(node, _SAFE_NODES):
+            raise ValueError(
+                f"Unsafe expression node: {type(node).__name__}. "
+                "Only arithmetic operations and basic math functions are allowed."
+            )
+        if isinstance(node, ast.Name):
+            if node.id in forbidden_names:
+                raise ValueError(f"Expression references forbidden name '{node.id}'.")
+            if allowed_names is not None and node.id not in allowed_names and node.id not in SAFE_MATH_FUNCS:
+                raise ValueError(
+                    f"Unknown variable '{node.id}'. Allowed: {sorted(allowed_names)}, "
+                    f"math functions: {list(SAFE_MATH_FUNCS)}"
+                )
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Pow):
+            if (isinstance(node.left, ast.BinOp) and isinstance(node.left.op, ast.Pow)) or (
+                isinstance(node.right, ast.BinOp) and isinstance(node.right.op, ast.Pow)
+            ):
+                raise ValueError("Chained exponentiation is not allowed.")
+            exp_val = _extract_numeric_constant(node.right)
+            if exp_val is not None and abs(exp_val) > _MAX_EXPONENT:
+                raise ValueError(f"Exponent {exp_val} exceeds allowed limit ({_MAX_EXPONENT}).")
+        if isinstance(node, ast.Call):
+            if not isinstance(node.func, ast.Name) or node.func.id not in SAFE_MATH_FUNCS:
+                raise ValueError(f"Unsafe function call. Only these are allowed: {list(SAFE_MATH_FUNCS)}")
+            if node.func.id == "pow" and len(node.args) >= 2:
+                exp_val = _extract_numeric_constant(node.args[1])
+                if exp_val is not None and abs(exp_val) > _MAX_EXPONENT:
+                    raise ValueError(f"Exponent {exp_val} exceeds allowed limit ({_MAX_EXPONENT}).")
+
+    return tree

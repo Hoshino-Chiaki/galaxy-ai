@@ -9,7 +9,7 @@ LABELS = {
  'ai:usage:read':'查看员工 AI 用量统计',
  'ai:prompt:configure':'设置本人的提示词与提示词附件',
  'ai:chat':'使用 AI 对话', 'ai:configure':'管理模型、提示词与工具配置',
- 'users:manage':'管理人员与部门', 'excel:export':'生成 Excel', 'file:publish':'发布下载附件', 'file:read':'下载附件',
+ 'users:manage':'管理人员与部门', 'excel:export':'生成 Excel', 'excel:process':'批量处理本人的 Excel 文件', 'file:publish':'发布下载附件', 'file:read':'下载附件',
  'schedule:create':'创建本人的定时任务','schedule:read':'查看本人的定时任务','schedule:update':'修改本人任务时间','schedule:delete':'删除本人的定时任务',
  'task:upload':'上传任务文件', 'task:har:read':'解析接口记录',
  'youzan:customer:read':'读取客户资料与客户数量', 'youzan:report:read':'读取经营报表', 'youzan:order:read':'读取订单',
@@ -36,7 +36,7 @@ def catalog():
 
 
 def action(code):
-    if code == 'ai:prompt:configure': return '修改'
+    if code in ('ai:prompt:configure', 'excel:process'): return '修改'
     if code.endswith(':read') or code=='guanjia:configure': return '查询'
     if code == 'clawbot:send': return '新增'
     if ':create' in code or code in ('excel:export', 'task:upload', 'youzan:material:upload'): return '新增'

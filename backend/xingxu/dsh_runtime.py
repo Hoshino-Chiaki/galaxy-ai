@@ -258,6 +258,21 @@ class DshTurn:
         if self.run is not None and self.run.interaction is not None:
             raise AuthFailure('answer_required', '请先等待用户回答当前选择框，不能并行执行其他业务。', 409)
         cost_file = (args[:2] == ['gjp', 'inventory-cost'] or args[:1] == ['gjp.inventory-cost']) and '--input' in args
+        excel_file = (args[:2] in (['excel', 'inspect'], ['excel', 'transform']) or args[:1] in (['excel.inspect'], ['excel.transform'])) and '--input' in args
+        if excel_file and 'excel:process' in self.principal()['permissions']:
+            from galaxy_cli.excel.schema import normalize as normalize_excel_file
+            index = args.index('--input') + 1
+            if index >= len(args): raise ValueError('Missing file input')
+            kind = args[1] if args[0] == 'excel' else args[0].split('.')[1]
+            try:value = normalize_excel_file(strict_json(args[index]), kind)
+            except ToolError as error:raise AuthFailure(error.code, error.message, 422) from None
+            sources = [value['source']] if kind == 'inspect' else list(value['sources'].values())
+            # Reuse the existing bounded worker-file export, then dispatch only the
+            # real Excel operation. No helper publishes or impersonates another user.
+            for source in sources:
+                source['path'] = await self.export_excel_source(source['path'])
+            args = [*args]; args[index] = json.dumps(value, ensure_ascii=False)
+            body = {**body, 'args': args}
         export_field = 'source_path' if cost_file else 'path'
         allowed_export = ({'guanjia:inventory-cost:read', 'file:read'}.issubset(self.principal()['permissions'])
                           if cost_file else 'file:publish' in self.principal()['permissions'])
@@ -321,6 +336,50 @@ class DshTurn:
         if self.run:
             self.run.tools_completed += 1
         return event['result']
+
+    async def export_excel_source(self, path):
+        if path.startswith(('/account-files/', '/account-cache/')):
+            return path
+        relative = path[len('/workspace/'):] if path.startswith('/workspace/') else path
+        try:
+            result = await worker_request({'command': 'read', 'run_id': self.identifier, 'path': relative})
+            if 'data' not in result:
+                # Files returned by previous Excel calls already live in the host
+                # account workspace, rather than this turn's DSH jail.
+                if path.startswith('/workspace/'):
+                    raise AuthFailure('dsh_export_failed', '当前执行目录内未找到这个文件。', 422)
+                return path
+            data = base64.b64decode(result['data'], validate=True)
+            if len(data) > 20 * 1024 * 1024:
+                raise AuthFailure('dsh_export_quota', '执行目录单文件导出不能超过20MB。', 413)
+            self.exported_bytes += len(data)
+            if self.exported_bytes > 64 * 1024 * 1024:
+                raise AuthFailure('dsh_export_quota', '本轮导出已达64MB，请减少重复导出或拆分任务。', 413)
+            from galaxy_cli.file_scope import relative_parts, root_directory, child_directory
+            relative_parts(relative)
+            workspace = self.ai.dispatcher.files.workspace(self.principal())
+            name = Path(relative).name
+            parts = ['dsh-exports', self.context.conversation_id, hashlib.sha256(data).hexdigest()]
+            export_root = workspace / 'dsh-exports'
+            used = sum(p.stat().st_size for p in export_root.rglob('*') if p.is_file()) if export_root.exists() else 0
+            with root_directory(workspace) as root, child_directory(root, parts, create=True) as directory:
+                from galaxy_cli.file_scope import regular_file
+                try:
+                    fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC, dir_fd=directory)
+                except FileNotFoundError:
+                    if used + len(data) > 128 * 1024 * 1024:
+                        raise AuthFailure('dsh_export_quota', '当前账号执行成果已达128MB。', 413)
+                    fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600, dir_fd=directory)
+                    with os.fdopen(fd, 'wb') as output:
+                        output.write(data); output.flush(); os.fsync(output.fileno())
+                else:
+                    with os.fdopen(fd, 'rb') as existing:
+                        regular_file(existing.fileno())
+                        if hashlib.sha256(existing.read()).hexdigest() != hashlib.sha256(data).hexdigest():
+                            raise AuthFailure('dsh_export_failed', '执行文件副本校验失败。', 422)
+            return '/'.join([*parts, name])
+        except (OSError, asyncio.TimeoutError):
+            raise AuthFailure('dsh_export_failed', '本轮文件无法导出，请重新生成。', 502) from None
 
     async def materialize(self, body):
         user = self.principal()

@@ -26,6 +26,7 @@ from galaxy_cli.feishu_capabilities import DOMAINS as FEISHU_DOMAINS
 from .store import JsonRepository
 from galaxy_cli.registry import ToolError
 from galaxy_cli.tools.excel.create import normalize as normalize_excel, OUTPUT as EXCEL_OUTPUT
+from galaxy_cli.excel.schema import normalize as normalize_excel_file, INSPECT_OUTPUT, TRANSFORM_OUTPUT
 from jsonschema import Draft202012Validator
 from galaxy_cli.tools.file.publish import normalize as normalize_file, OUTPUT as FILE_OUTPUT
 from .files import FileService
@@ -50,6 +51,7 @@ COMMAND_PERMISSIONS['time.now'] = 'workspace:read'
 COMMAND_PERMISSIONS.update({'erp.' + name: 'users:manage' for name in ('employee-create', 'department-create', 'employee-move')})
 COMMAND_PERMISSIONS.update({'gjp.' + name: 'guanjia:configure' for name in ('inventory', 'organizations', 'product-info')})
 COMMAND_PERMISSIONS['gjp.inventory-cost'] = 'guanjia:inventory-cost:read'
+COMMAND_PERMISSIONS.update({'excel.inspect': 'excel:process', 'excel.transform': 'excel:process'})
 COMMAND_PERMISSIONS.update({'schedule.'+name:permission for name,permission in SCHEDULE_PERMISSIONS.items()})
 COMMAND_PERMISSIONS['account.me'] = 'workspace:read'
 COMMAND_PERMISSIONS['jushuitan.order-search'] = 'jushuitan:order:read'
@@ -180,6 +182,16 @@ def help_arguments(raw):
     normalized = normalize_catalog(args)
     if normalized is not None:
         return normalized
+    if args[0] in ('excel.inspect', 'excel.transform') or args[:2] in (['excel', 'inspect'], ['excel', 'transform']):
+        if args[0].startswith('excel.'):
+            args = ['excel', args[0].split('.')[1], *args[1:]]
+        if len(args) not in (4, 6) or args[2] != '--input' or len(args) == 6 and args[4:] != ['--format', 'json']:
+            raise DispatchDenied('invalid_arguments', '请使用 excel inspect/transform --input JSON。')
+        try:
+            body = normalize_excel_file(strict_json(args[3]), args[1])
+        except ToolError as error:
+            raise DispatchDenied('invalid_arguments', error.message) from None
+        return ['excel', args[1], '--input', json.dumps(body, ensure_ascii=False), '--format', 'json']
     if args[0] in ('excel.create', 'excel'):
         if args[0] == 'excel.create':
             args = ['excel', 'create', *args[1:]]
@@ -388,7 +400,7 @@ class GalaxyDispatcher:
         try:
             stdout, _stderr, return_code, _ = await asyncio.wait_for(
                 readers,
-                timeout=None if all_order_pages else 180 if name == 'gjp.inventory-cost' or catalog_context is not None else 40 if file_context is not None else self.timeout if credentials is None else 180 if arguments[0] == 'feishu' else 90 if arguments[0] == 'jushuitan' else 90 if arguments[:2] == ['youzan', 'business-report'] else 60 if arguments[:2] == ["youzan", "customer-get"] else 40)
+                timeout=None if all_order_pages else 180 if name in ('gjp.inventory-cost', 'excel.inspect', 'excel.transform') or catalog_context is not None else 40 if file_context is not None else self.timeout if credentials is None else 180 if arguments[0] == 'feishu' else 90 if arguments[0] == 'jushuitan' else 90 if arguments[:2] == ['youzan', 'business-report'] else 60 if arguments[:2] == ["youzan", "customer-get"] else 40)
             try:
                 result = (await asyncio.to_thread(strict_json, stdout.decode('utf-8')) if len(stdout) > 256 * 1024
                           else strict_json(stdout.decode('utf-8')))
@@ -426,7 +438,8 @@ class GalaxyDispatcher:
                 return redact_category(result, credentials)
             if credentials is not None and arguments[:3] == ['youzan', 'business-report', 'options'] and isinstance(result, dict) and set(result) == OPTION_KEYS:
                 return redact_category(result, credentials)
-            if file_context is not None and return_code == 0 and Draft202012Validator(EXCEL_OUTPUT if arguments[0] == 'excel' else FILE_OUTPUT).is_valid(result):
+            file_schema = {'create': EXCEL_OUTPUT, 'inspect': INSPECT_OUTPUT, 'transform': TRANSFORM_OUTPUT}.get(arguments[1], EXCEL_OUTPUT) if arguments[0] == 'excel' else FILE_OUTPUT
+            if file_context is not None and return_code == 0 and Draft202012Validator(file_schema).is_valid(result):
                 return result
             if arguments[:2] == ['task', 'har'] and return_code == 0 and Draft202012Validator(HAR_OUTPUT).is_valid(result):
                 return result
@@ -550,13 +563,16 @@ class GalaxyDispatcher:
                 elif command == 'time.now':
                     result = await self._run(canonical, user)
                     self._check_command(context, command, canonical)
-                elif command in ('excel.create', 'file.publish'):
+                elif command in ('excel.create', 'excel.inspect', 'excel.transform', 'file.publish'):
                     publication_id = str(uuid.uuid4())
                     relative = strict_json(canonical[3]).get('path')
                     try:
                         workspace = self.files.workspace(user)
                         snapshot = self.files.inspect_source(user, relative) if command == 'file.publish' else None
-                        file_context = {'workspace_directory': str(workspace)}
+                        file_context = {'workspace_directory': str(workspace), 'cache_directory': str(self.files.cache(user))}
+                        if command in ('excel.inspect', 'excel.transform'):
+                            if self.uploads.storage is not None:
+                                file_context['source_limit_bytes'] = self.uploads.storage.settings()['quota_bytes']
                         if command == 'file.publish':
                             file_context.update({'hosting_directory': str(self.files.published_root(user)), 'publication_id': publication_id})
                         result = await self._run(canonical, user, file_context=file_context)
@@ -564,8 +580,10 @@ class GalaxyDispatcher:
                         if COMMAND_PERMISSIONS[command] not in user['permissions']:
                             raise DispatchDenied('permission_denied', '当前账号没有该文件工具权限。')
                         if 'error' not in result:
-                            result = (self.files.generated(result, user) if command == 'excel.create' else
-                                self.files.accept(result, relative, publication_id, snapshot, user, context.conversation_id))
+                            if command in ('excel.create', 'excel.transform'):
+                                result = self.files.generated(result, user)
+                            elif command == 'file.publish':
+                                result = self.files.accept(result, relative, publication_id, snapshot, user, context.conversation_id)
                     except AuthFailure as error:
                         raise DispatchDenied(error.code, error.message) from None
                     finally:
