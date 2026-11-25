@@ -22,6 +22,7 @@ LABELS = {
  'clawbot:send':'发送文字与文件到本人微信',
  'clawbot:configure':'绑定并使用本人的微信 ClawBot',
  'guanjia:configure':'连接管家婆并查询 ERP 数据',
+ 'guanjia:inventory-cost:read':'读取已绑定账套的全部库存均价',
  'jushuitan:order:read':'读取聚水潭供应链订单',
 }
 GROUPS = [('ai','AI'),('schedule','任务调度（实验）'),('youzan','有赞'),('feishu','飞书'),('guanjia','管家婆'),('jushuitan','聚水潭'),('clawbot','ClawBot'),('erp','ERP'),('files','文件与附件')]

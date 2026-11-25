@@ -40,7 +40,8 @@ def main(argv=None):
             supported = (args.command == 'excel' and args.target == 'create' or args.command == 'excel.create'
                 or args.command == 'file' and args.target == 'publish' or args.command == 'file.publish'
                 or args.command == 'youzan' and args.target in NAMES or args.command in {'youzan.'+name for name in NAMES}
-                or args.command == 'task' and args.target == 'har' or args.command == 'task.har')
+                or args.command == 'task' and args.target == 'har' or args.command == 'task.har'
+                or args.command == 'gjp' and args.target == 'inventory-cost' or args.command == 'gjp.inventory-cost')
             if args.input is not None or not supported:
                 raise ToolError('invalid_arguments', '该命令不支持管道输入。')
             frame = read_context()

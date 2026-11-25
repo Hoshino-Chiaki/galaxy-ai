@@ -34,7 +34,7 @@ def arguments(args):
 
 
 def redact(value, credentials):
-    secrets = [credentials.get('cookie'), credentials.get('sid')]
+    secrets = [credentials.get('cookie'), credentials.get('sid'), credentials.get('password')]
     secrets.extend(c.get('value') for c in credentials.get('cookies', []) if isinstance(c, dict) and len(c.get('value', '')) >= 8)
     def clean(item):
         if isinstance(item, dict):

@@ -7,6 +7,7 @@ import ipaddress
 import json
 import os
 from pathlib import Path
+from galaxy_cli.registry import ToolError
 import secrets
 import shutil
 import socket
@@ -256,18 +257,27 @@ class DshTurn:
             raise ValueError('Invalid arguments')
         if self.run is not None and self.run.interaction is not None:
             raise AuthFailure('answer_required', '请先等待用户回答当前选择框，不能并行执行其他业务。', 409)
-        if args[:2] == ['file', 'publish'] and '--input' in args and 'file:publish' in self.principal()['permissions']:
+        cost_file = (args[:2] == ['gjp', 'inventory-cost'] or args[:1] == ['gjp.inventory-cost']) and '--input' in args
+        export_field = 'source_path' if cost_file else 'path'
+        allowed_export = ({'guanjia:inventory-cost:read', 'file:read'}.issubset(self.principal()['permissions'])
+                          if cost_file else 'file:publish' in self.principal()['permissions'])
+        if (args[:2] == ['file', 'publish'] or cost_file) and '--input' in args and allowed_export:
             index = args.index('--input') + 1
             if index >= len(args):
                 raise ValueError('Missing file input')
             value = strict_json(args[index])
-            if not isinstance(value, dict) or set(value) != {'path'} or not isinstance(value.get('path'), str):
+            if cost_file:
+                from galaxy_cli.gjp.cost_schema import normalize as normalize_cost
+                try:value = normalize_cost(value)
+                except ToolError as error:raise AuthFailure(error.code, error.message, 422) from None
+            if not cost_file and (not isinstance(value, dict) or set(value) != {'path'} or not isinstance(value.get('path'), str)):
                 raise ValueError('Invalid file input')
-            relative = value.get('path', '')
+            relative = value.get(export_field, '')
+            export_source = bool(relative) and not relative.startswith(('/account-files/', '/account-cache/'))
             if relative.startswith('/workspace/'):
                 relative = relative[len('/workspace/'):]
             try:
-                result = await worker_request({'command': 'read', 'run_id': self.identifier, 'path': relative})
+                result = await worker_request({'command': 'read', 'run_id': self.identifier, 'path': relative}) if export_source else {}
                 if 'data' in result:
                     data = base64.b64decode(result['data'], validate=True)
                     if len(data) > 20 * 1024 * 1024:
@@ -290,7 +300,7 @@ class DshTurn:
                         folder.mkdir(mode=0o700, parents=True, exist_ok=True)
                         output.write_bytes(data)
                         output.chmod(0o600)
-                    value['path'] = output.relative_to(workspace).as_posix()
+                    value[export_field] = output.relative_to(workspace).as_posix()
                     args = [*args]
                     args[index] = json.dumps(value, ensure_ascii=False)
                     body = {**body, 'args': args}

@@ -102,6 +102,8 @@ def create_app(data_dir=None, policy=None, ai_transport=None, youzan_transport=N
     guanjia = GuanjiaService(directory, ai.cipher)
     application.state.guanjia = guanjia
     ai.dispatcher.gjp_provider = guanjia
+    from .guanjia.cost_source import CostSource
+    ai.dispatcher.gjp_cost_provider = CostSource(directory, ai.cipher, guanjia)
     jushuitan = JushuitanService(directory, ai.cipher)
     application.state.jushuitan = jushuitan
     ai.dispatcher.jushuitan_provider = jushuitan

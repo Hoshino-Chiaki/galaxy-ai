@@ -88,10 +88,10 @@ class GjpTests(unittest.TestCase):
             self.assertEqual(error.exception.code, code)
             self.assertNotIn('secret-connection-string', str(error.exception))
 
-    def test_three_tools_are_registered(self):
+    def test_gjp_tools_are_registered(self):
         registry = load_registry()
         self.assertEqual({t['name'] for t in registry.describe(category='gjp')},
-                         {'gjp.inventory', 'gjp.organizations', 'gjp.product-info'})
+                         {'gjp.inventory', 'gjp.organizations', 'gjp.product-info', 'gjp.inventory-cost'})
 
 
 if __name__ == '__main__':

@@ -49,6 +49,7 @@ COMMAND_PERMISSIONS['interaction.ask'] = 'ai:chat'
 COMMAND_PERMISSIONS['time.now'] = 'workspace:read'
 COMMAND_PERMISSIONS.update({'erp.' + name: 'users:manage' for name in ('employee-create', 'department-create', 'employee-move')})
 COMMAND_PERMISSIONS.update({'gjp.' + name: 'guanjia:configure' for name in ('inventory', 'organizations', 'product-info')})
+COMMAND_PERMISSIONS['gjp.inventory-cost'] = 'guanjia:inventory-cost:read'
 COMMAND_PERMISSIONS.update({'schedule.'+name:permission for name,permission in SCHEDULE_PERMISSIONS.items()})
 COMMAND_PERMISSIONS['account.me'] = 'workspace:read'
 COMMAND_PERMISSIONS['jushuitan.order-search'] = 'jushuitan:order:read'
@@ -58,6 +59,9 @@ COMMAND_PERMISSIONS.update({'task.request-upload': 'task:upload', 'task.har': 't
 
 
 def required_permissions(command, canonical):
+    if command == 'gjp.inventory-cost':
+        value = strict_json(canonical[canonical.index('--input') + 1])
+        return {'guanjia:inventory-cost:read'} | ({'file:read'} if 'source_path' in value else set())
     if command == 'clawbot.send':return clawbot_permissions(canonical)
     if command.startswith('feishu.'):return feishu_permissions(command,canonical)
     if command.startswith('youzan.') and command[7:] in CATALOG_NAMES:
@@ -384,7 +388,7 @@ class GalaxyDispatcher:
         try:
             stdout, _stderr, return_code, _ = await asyncio.wait_for(
                 readers,
-                timeout=None if all_order_pages else 180 if catalog_context is not None else 40 if file_context is not None else self.timeout if credentials is None else 180 if arguments[0] == 'feishu' else 90 if arguments[0] == 'jushuitan' else 90 if arguments[:2] == ['youzan', 'business-report'] else 60 if arguments[:2] == ["youzan", "customer-get"] else 40)
+                timeout=None if all_order_pages else 180 if name == 'gjp.inventory-cost' or catalog_context is not None else 40 if file_context is not None else self.timeout if credentials is None else 180 if arguments[0] == 'feishu' else 90 if arguments[0] == 'jushuitan' else 90 if arguments[:2] == ['youzan', 'business-report'] else 60 if arguments[:2] == ["youzan", "customer-get"] else 40)
             try:
                 result = (await asyncio.to_thread(strict_json, stdout.decode('utf-8')) if len(stdout) > 256 * 1024
                           else strict_json(stdout.decode('utf-8')))
@@ -567,6 +571,8 @@ class GalaxyDispatcher:
                     finally:
                         if command == 'file.publish':
                             self.files.cleanup_publication(publication_id, relative, user)
+                elif command == 'gjp.inventory-cost':
+                    result = await self._gjp_cost_run(context, command, canonical, event)
                 elif command.startswith('gjp.'):
                     result = await self._gjp_run(context, command, canonical)
                 elif command.startswith('jushuitan.'):
@@ -585,6 +591,8 @@ class GalaxyDispatcher:
                 failed = all('error' in row or tool_failed(command, canonical, row['data']) for row in result['shops'])
             else:
                 failed = tool_failed(command, canonical, result)
+            if command == 'gjp.inventory-cost' and isinstance(result.get('data'), dict):
+                failed = failed or 'error' in result['data'] or not result['data'].get('summary', {}).get('complete', False)
             result = await cache_result(self, context, command, canonical, scope, result, failed)
             event.update({"status": "error" if failed else "success", "result": result})
         except asyncio.CancelledError:
@@ -597,9 +605,13 @@ class GalaxyDispatcher:
             elif event.get('command', '').startswith('galaxy-cli erp '):
                 message = '已停止等待 ERP 操作，请到人员管理核对结果；打断不会撤销已完成的修改。'
             event.update({'status': 'cancelled', 'result': {'error': {'code': 'interrupted', 'message': message}}})
+            if event.get('resume_id'):
+                event['result'].update(resume_id=event['resume_id'], complete=False)
         except DispatchDenied as error:
             status = "error" if error.code.startswith('cache_') or error.code in {"cli_unavailable", "cli_failed", "cli_timeout", "output_limit", "invalid_cli_output"} else "denied"
             event.update({"status": status, "result": {"version": CLI_VERSION, "error": {"code": error.code, "message": error.message}}})
+            if event.get('resume_id'):
+                event['result'].update(resume_id=event['resume_id'], complete=False)
         event["duration_ms"] = round((time.monotonic() - started) * 1000)
         record = {key: event[key] for key in ("id", "call_id", "name", "command", "status", "created_at", "duration_ms")}
         record.update({"user_id": context.user_id if context else None,
@@ -631,6 +643,27 @@ class GalaxyDispatcher:
                 if provider.credentials(user) != credentials:
                     raise DispatchDenied('connection_changed', '聚水潭登录已变化，请重新查询。')
                 return result
+        except AuthFailure as error:
+            raise DispatchDenied(error.code, error.message) from None
+
+    async def _gjp_cost_run(self, context, command, canonical, event):
+        provider = getattr(self, 'gjp_cost_provider', None)
+        if provider is None:
+            raise DispatchDenied('gjp_cost_source_required', '库存均价数据源尚未配置。')
+        user = self._check_command(context, command, canonical)
+        body = strict_json(canonical[canonical.index('--input') + 1])
+        job_id = body.get('resume_id') or uuid.uuid4().hex
+        event['resume_id'] = job_id
+        try:
+            credentials = provider.credentials(user)
+            storage = getattr(self.uploads, 'storage', None)
+            limit = storage.settings()['quota_bytes'] if storage is not None else 512 * 1024 * 1024
+            frame = provider.frame(user, credentials, self.files, job_id, limit)
+            result = await self._run(canonical, user, credentials=credentials, file_context=frame)
+            user = self._check_command(context, command, canonical)
+            if provider.credentials(user)['source_revision'] != credentials['source_revision']:
+                raise DispatchDenied('connection_changed', '账套或库存数据源已变化，请重新查询。')
+            return result
         except AuthFailure as error:
             raise DispatchDenied(error.code, error.message) from None
 

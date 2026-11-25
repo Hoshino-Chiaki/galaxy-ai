@@ -89,6 +89,10 @@ def write_result(frame, command, canonical, context, scope, result, failed, canc
                 dataset.append(json.dumps(result, ensure_ascii=False, allow_nan=False, separators=(',', ':')).encode() + b'\n')
             dataset.metadata.update(complete=True, count=1, pages=1, coverage='downloaded_file' if binary else 'tool_response',
                                     business_success=not failed, command=command)
+            if command == 'gjp.inventory-cost' and isinstance(result.get('data', {}).get('summary'), dict):
+                summary = result['data']['summary']
+                dataset.metadata.update(complete=summary['complete'], count=summary['processed'],
+                                        total=summary['total'], pages=summary['batches'], coverage='requested_barcodes')
             dataset.save()
             receipt = dict(dataset.metadata)
             return receipt
@@ -144,7 +148,9 @@ async def cache_result(dispatcher, context, command, canonical, scope, result, f
         with root_directory(dispatcher.files.workspace(user)) as descriptor, child_directory(descriptor, parts[:-1]) as parent:
             try:os.unlink(parts[-1], dir_fd=parent)
             except OSError:pass
-    return {**receipt, 'cached': True, 'success': not failed,
+    cost_summary = ({'summary': result['data']['summary'], 'resume_id': result['data']['resume_id']}
+                    if command == 'gjp.inventory-cost' and isinstance(result.get('data', {}).get('summary'), dict) else {})
+    return {**receipt, **cost_summary, 'cached': True, 'success': not failed,
             **({'partial': True} if result.get('partial') is True else {}),
             **({'error': {'code': 'upstream_failed', 'message': '业务工具返回失败，完整错误见缓存；勿将其视为成功结果。'}} if failed else {}),
             'read_hint': ('二进制文件，按filename的扩展名选择解析库；如需发布，先复制到/workspace再file.publish。' if receipt['format'] == 'binary'
