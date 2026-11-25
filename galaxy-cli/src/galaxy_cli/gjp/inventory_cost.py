@@ -15,6 +15,7 @@ from decimal import Decimal, InvalidOperation, ROUND_HALF_UP, localcontext
 from pathlib import PurePosixPath
 
 from .cost_schema import normalize
+from .categories import fields as category_fields, query as query_categories
 from ..file_scope import source_file, regular_file, fingerprint, root_directory
 from ..registry import ToolError
 
@@ -189,9 +190,11 @@ class SqlClient:
         try:
             with self.connection.cursor() as cursor:
                 cursor.execute(sql, tuple(barcodes) + tuple(params))
-                return cursor.fetchall()
+                rows = cursor.fetchall()
         except self.driver.Error:
             raise ToolError('gjp_cost_query_failed', '库存均价数据库查询失败或超时；已完成批次已保存，可使用resume_id续跑。') from None
+        categories = query_categories(self, [str(row['TypeID']) for row in rows])
+        return [{**row, **categories[str(row['TypeID'])]} for row in rows]
 
 
 def price_row(row):
@@ -215,17 +218,19 @@ def price_row(row):
     return {'product_id': str(row['TypeID']), 'product_name': row['FullName'],
             'quantity': format(qty, 'f') if qty is not None else None,
             'stock_amount': format(amount, 'f') if amount is not None else None,
-            'avg_cost': format(cost, '.2f') if cost is not None else None, 'status': status}
+            'avg_cost': format(cost, '.2f') if cost is not None else None, 'status': status,
+            **{key: row.get(key, default) for key, default in category_fields('unavailable').items()}}
 
 
 def match_item(item, candidates):
     if not candidates:
-        return {'barcode': item['barcode'], 'avg_cost': None, 'status': 'not_found'}
+        return {'barcode': item['barcode'], 'avg_cost': None, 'status': 'not_found', **category_fields('not_found')}
     choices = candidates
     if len(choices) > 1 and item.get('product_name'):
         choices = [row for row in choices if clean_name(row['FullName']) == clean_name(item['product_name'])]
     if len(choices) != 1:
         return {'barcode': item['barcode'], 'avg_cost': None, 'status': 'ambiguous',
+                **category_fields('ambiguous'),
                 'candidates': [price_row(row) for row in candidates]}
     return {'barcode': item['barcode'], **price_row(choices[0])}
 
@@ -248,7 +253,8 @@ def save_state(root, identifier, state):
 
 
 def result(state, error=None):
-    rows = state['rows']; counts = Counter(row['status'] for row in rows)
+    rows = [{**category_fields('legacy_checkpoint'), **row} for row in state['rows']]
+    counts = Counter(row['status'] for row in rows)
     complete = len(rows) == len(state['items'])
     priced = sum(row.get('avg_cost') is not None for row in rows)
     summary = {'total': len(state['items']), 'processed': len(rows), 'priced': priced,
@@ -256,7 +262,9 @@ def result(state, error=None):
                'needs_review': len(rows) - priced, 'complete': complete, 'all_priced': complete and priced == len(rows),
                'batches': state['batches'], 'database': state['database'], 'scope': state['scope'],
                'started_at': state['created_at'], 'as_of_from': state.get('as_of_from'), 'as_of_to': state.get('as_of_to'),
-               'price_precision': 2}
+               'price_precision': 2,
+               'categorized': sum(row['category_status'] == 'matched' for row in rows),
+               'category_needs_review': sum(row['category_status'] != 'matched' for row in rows)}
     return {'data': {'resume_id': state['id'], 'summary': summary, 'rows': rows, **({'error': error} if error else {})}}
 
 

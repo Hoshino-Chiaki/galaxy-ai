@@ -3,7 +3,7 @@ from ...gjp.cost_schema import INPUT
 from ...gjp.schemas import OUTPUT
 
 DESCRIPTION = (
-    '批量查询管家婆当前库存均价，命令 galaxy-cli gjp inventory-cost --input JSON。'
+    '批量查询管家婆当前库存均价和商品完整分类，命令 galaxy-cli gjp inventory-cost --input JSON。'
     'barcodes、source_path、resume_id 必选且只选一种：barcodes 为条码字符串数组，或包含 barcode、可选 product_name 的对象数组；'
     '大量条码优先传 source_path，支持本人工作目录、/account-files、/account-cache 中的 XLSX、CSV、JSON、JSONL；'
     '文件可选 barcode_column（默认“规格编码”）、name_column、sheet（XLSX工作表名，默认第一张）、header_row（表格标题行，默认1）。'
@@ -14,6 +14,13 @@ DESCRIPTION = (
     '零库存且金额及存储单价均为0时均价为0；负库存、零数量残留金额、缺少库存记录等返回待核对状态与null均价，不能按0成本处理。'
     '同条码多商品只有商品名精确匹配唯一候选时才选择，否则返回ambiguous及候选，禁止默认取第一项。'
     '输出data含resume_id、summary、rows；每行含barcode、商品ID和名称、quantity、stock_amount、avg_cost、status，金额和数量为十进制字符串。'
+    '商品分类直接从同一账套数据库按真实父分类关系批量查询，不依赖网页Cookie/SID，也不按商品ID前缀猜分类。'
+    '每行另含category_status、category_path、categories；category_status=matched表示分类链完整，category_path为从一级到末级的完整分类路径，'
+    'categories为按顺序排列的{id,name,level}数组，已排除“库存商品”根节点及商品本身。建议按categories解析层级，不能把商品名当成分类。'
+    '分类与均价分别判断：avg_cost=null的商品仍可能有完整分类；只需补分类时也调用本工具，读取category_status和categories，不因缺成本改调网页登录工具。'
+    '同码多商品未唯一匹配时，各候选分别返回分类，不能任选一项。分类为空、缺父节点、父链循环、节点删除或查询失败会明确标记，不补造路径。'
+    'summary.categorized和category_needs_review分别为分类成功和待核对条数；与成本的priced、needs_review独立。'
+    '旧缓存或旧续跑结果可能标记legacy_checkpoint，缺少分类时重新发起条码/文件查询，不靠resume_id补查已完成批次。'
     '完整结果存本人缓存，聊天只返回摘要及实际sandbox_path；summary.complete表示全部请求已处理，不代表所有条码都有可用价格，需检查needs_review。'
     '失败或打断可仅传真实resume_id继续未完成批次；已完成批次不重查，续跑时间可能不同。新查询默认重新取数，不能把当前库存均价当成历史出库实际成本。'
 )
