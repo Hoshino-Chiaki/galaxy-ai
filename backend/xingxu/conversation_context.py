@@ -59,6 +59,18 @@ class ConversationContext:
         return {'version': 1, 'summary': self.summary, 'covered_messages': self.covered,
                 'through_message_id': self.history[self.covered - 1]['id']}
 
+    def restore_for_dsh(self, current):
+        """Restore original records; DSH alone owns its context compaction.
+
+        A failed/cancelled turn may have no resumable DSH checkpoint. Rebuilding
+        it must not use the legacy input budget or a previously saved summary:
+        those can discard the user's original workflow and recovery constraints.
+        Tool calls remain historical JSON passed to DSH, never dispatched here.
+        """
+        return (copy.deepcopy(current[:-1])
+                + history_messages(self.history, deepseek=self.deepseek)
+                + copy.deepcopy(current[-1:]))
+
     def _assemble(self, prefix, current_turn, *, cutoff=None, summary=None):
         cutoff = self.covered if cutoff is None else cutoff
         summary = self.summary if summary is None else summary

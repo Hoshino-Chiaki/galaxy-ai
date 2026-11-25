@@ -409,6 +409,8 @@ class AiService:
             nonlocal prepared
             if memory is None:
                 return wire
+            if self.runtime_name == 'dsh' and not testing:
+                return memory.restore_for_dsh(wire)
             result = await (memory.fit(wire, tools, summarize) if prepared else memory.prepare(wire, tools, summarize))
             prepared = True
             return result
@@ -462,8 +464,8 @@ class AiService:
                 from .dsh_runtime import DshTurn
                 turn = DshTurn(self, context, provider, run=run, progress=progress,
                                thinking=thinking, reasoning_effort=reasoning_effort)
-                # Legacy summary preparation is used only for one-time migration.
-                # Subsequent turns resume DSH's durable session and own compaction.
+                # DSH owns compaction both when restoring original history and
+                # when continuing its durable session; no legacy summary pass.
                 try:
                     if self.dsh_turns >= 8:
                         raise AuthFailure('dsh_queue_full', '当前等待的会话较多，请稍后重试。', 429)
