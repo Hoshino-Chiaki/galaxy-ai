@@ -17,6 +17,7 @@ class ChatRun:
     phase_started_at: float = field(default_factory=time.monotonic)
     phase: str = 'preparing'
     phase_times: dict = field(default_factory=dict)
+    queue_position: int | None = None
     model_calls: int = 0
     summary_calls: int = 0
     tools_completed: int = 0
@@ -36,18 +37,26 @@ class ChatRun:
 
     def snapshot(self):
         now = time.monotonic()
+        interaction = copy.deepcopy(self.interaction)
+        if interaction and interaction.get('kind') == 'verification':
+            interaction['server_now_ms'] = int(time.time()*1000)
         model_seconds = self.phase_times.get('model', 0)
         if self.phase == 'model':
             model_seconds += now - self.phase_started_at
-        return {'status': 'awaiting_input' if self.interaction else 'running', 'phase': self.phase, 'elapsed_ms': max(0, round((now - self.started_at) * 1000)),
+        # Existing clients know "tool" and show tool_name; new clients render
+        # queue_position directly. Both show waiting rather than silent preparation.
+        return {'status': 'awaiting_input' if self.interaction else 'running', 'phase': 'tool' if self.phase == 'queued' else self.phase,
+            'queue_position': self.queue_position, 'elapsed_ms': max(0, round((now - self.started_at) * 1000)),
             'phase_elapsed_ms': max(0, round((now - self.phase_started_at) * 1000)),
             'model_elapsed_ms': max(0, round(model_seconds * 1000)), 'model_calls': self.model_calls,
             'summary_calls': self.summary_calls, 'tools_completed': self.tools_completed, 'tool_name': self.tool_name,
-            'reasoning_content': self.reasoning_content, 'interaction': copy.deepcopy(self.interaction)}
+            'reasoning_content': self.reasoning_content, 'interaction': interaction}
 
 
 class ChatRuns:
     def __init__(self):
+        from .verification import Verifications
+        self.verifications = Verifications()
         self.active = {}
         self.pending_stops = {}
 
@@ -79,6 +88,8 @@ class ChatRuns:
         from galaxy_cli.tools.interaction.ask import normalize
         if run is None or self.active.get(run.key) is not run or run.stop_requested:
             raise AuthFailure('request_ended', '当前聊天请求已结束。', 409)
+        if isinstance(body,dict) and body.get('kind') == 'verification':
+            return await self.verifications.wait(run,body['entry'])
         if run.interaction is not None:
             raise AuthFailure('question_busy', '请先回答当前问题。', 409)
         question = {'id': str(uuid.uuid4()), **normalize(body)}
@@ -98,6 +109,8 @@ class ChatRuns:
         run = self.active.get(self.key(user, identifier))
         if run is None or run.stop_requested:
             raise AuthFailure('not_found', '当前询问已结束，请重新发送问题。', 404)
+        if run.interaction and run.interaction.get('kind')=='verification':
+            raise AuthFailure('invalid_input','验证码只能通过专用输入窗口提交。',422)
         key = str(interaction_id)
         if key in run.answered:
             if run.answered[key] != answers:
@@ -146,6 +159,7 @@ class ChatRuns:
         return {'requested': True}
 
     def finish(self, run):
+        self.verifications.cancel_run(run)
         if self.active.get(run.key) is run:
             self.active.pop(run.key)
         run.finished.set()

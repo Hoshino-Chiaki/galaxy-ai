@@ -73,6 +73,14 @@ class CancelChatInput(BaseModel):
     request_id: uuid.UUID
 
 
+class VerificationAnswerInput(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    request_id: uuid.UUID
+    challenge_id: uuid.UUID
+    code: str | None = Field(default=None, min_length=4, max_length=16)
+    cancel: bool = False
+
+
 def scoped_download(path, filename, media_type):
     # Read the exact no-follow descriptor validated here, not a path reopened later.
     try:
@@ -110,6 +118,8 @@ def create_app(data_dir=None, policy=None, ai_transport=None, youzan_transport=N
     youzan = YouzanService(directory, ai.cipher, transport=youzan_transport,
                           login_runner=youzan_login_runner, authorize=service.identity)
     application.state.youzan = youzan
+    from .youzan.order_export import OrderExports
+    ai.dispatcher.order_export_provider = OrderExports(youzan,ai.dispatcher.files,ai.runs.verifications)
     from .youzan.renewal import YouzanRenewal
     youzan.renewal = YouzanRenewal(youzan, service)
     feishu = FeishuService(directory, ai.cipher, transport=feishu_transport)
@@ -130,6 +140,10 @@ def create_app(data_dir=None, policy=None, ai_transport=None, youzan_transport=N
     ai.dispatcher.account_provider = AccountInfo(youzan=youzan, feishu=feishu, guanjia=guanjia, jushuitan=jushuitan, clawbot=clawbot)
     ai.dispatcher.schedule_provider = schedules
 
+    from .chat_jobs import ChatJobs
+    chat_jobs = ChatJobs(ai)
+    application.state.chat_jobs = chat_jobs
+
     @asynccontextmanager
     async def lifespan(_app):
         youzan.renewal.start()
@@ -140,6 +154,7 @@ def create_app(data_dir=None, policy=None, ai_transport=None, youzan_transport=N
         try:
             yield
         finally:
+            await chat_jobs.close()
             housekeeping.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await housekeeping
@@ -159,6 +174,8 @@ def create_app(data_dir=None, policy=None, ai_transport=None, youzan_transport=N
             maximum = MAX_UPLOAD
         if request.method == 'PUT' and re.fullmatch(r'/api/v1/storage/uploads/[0-9a-f-]{36}/content', request.url.path):
             maximum = storage.settings()['quota_bytes']
+        if request.method == 'PUT' and re.fullmatch(r'/api/v1/personal-prompt/uploads/[0-9a-f-]{36}/content', request.url.path):
+            maximum = ai.personal_prompts.settings()['quota_bytes']
         if not length.isdigit() or int(length) > maximum:
             return JSONResponse({"error": {"code": "invalid_input", "message": "请求内容过大。"}}, status_code=413)
         response = await call_next(request)
@@ -363,6 +380,22 @@ def create_app(data_dir=None, policy=None, ai_transport=None, youzan_transport=N
     async def send_message(body: ChatInput, user: Annotated[dict, Depends(chat_user)], value: Annotated[str, Depends(token)]):
         return await ai.send(user, body, session_token=value)
 
+    @application.post('/api/v1/chat/jobs', status_code=202)
+    async def submit_chat_job(body: ChatInput, user: Annotated[dict, Depends(chat_user)], value: Annotated[str, Depends(token)]):
+        return await chat_jobs.submit(user,body,value)
+
+    @application.get('/api/v1/chat/jobs')
+    async def pending_chat_jobs(user: Annotated[dict, Depends(chat_user)]):
+        return chat_jobs.pending(user)
+
+    @application.get('/api/v1/chat/jobs/{identifier}/result')
+    async def chat_job_result(identifier: uuid.UUID,user: Annotated[dict, Depends(chat_user)]):
+        return chat_jobs.result(user,identifier)
+
+    @application.post('/api/v1/chat/jobs/{identifier}/ack')
+    async def acknowledge_chat_job(identifier: uuid.UUID,user: Annotated[dict, Depends(chat_user)]):
+        return chat_jobs.acknowledge(user,identifier)
+
     @application.post('/api/v1/chat/cancel')
     async def cancel_message(body: CancelChatInput, user: Annotated[dict, Depends(chat_user)]):
         return await ai.cancel(user, body.request_id)
@@ -372,8 +405,18 @@ def create_app(data_dir=None, policy=None, ai_transport=None, youzan_transport=N
         return ai.runs.answer(user, body.request_id, body.interaction_id,
             [item.model_dump(exclude_none=True) for item in body.answers])
 
+    @application.post('/api/v1/chat/verification')
+    async def answer_verification(body: VerificationAnswerInput, user: Annotated[dict, Depends(chat_user)]):
+        run=ai.runs.active.get(ai.runs.key(user,body.request_id))
+        if run is None or run.stop_requested:
+            raise AuthFailure('request_ended','验证码等待已结束。',409)
+        if (body.code is None)==(not body.cancel):
+            raise AuthFailure('invalid_input','请填写验证码或取消验证。',422)
+        return ai.runs.verifications.answer(run,user,str(body.challenge_id),code=body.code,cancel=body.cancel)
+
     @application.get('/api/v1/chat/runs/{identifier}')
     async def chat_progress(identifier: uuid.UUID, user: Annotated[dict, Depends(chat_user)]):
+        if chat_jobs.path(user,identifier).exists():return chat_jobs.status(user,identifier)
         return ai.runs.status(user, identifier)
 
     return application

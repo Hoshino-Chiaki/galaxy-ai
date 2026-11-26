@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type FormEvent, type KeyboardEvent, type UIEvent } from 'react'
 import { CalendarClock, ArrowUp, BrainCircuit, ChevronDown, Download, File, FileSpreadsheet, History, LoaderCircle, Plus, Sparkles, Square, SquarePen, SquareTerminal, Trash2, UserRound, X } from 'lucide-react'
 import { service } from './service'
 import MarkdownMessage from './components/MarkdownMessage'
 import PendingReply, { formatDuration } from './components/PendingReply'
 import ClarificationPanel from './components/ClarificationPanel'
+import VerificationDialog from './components/VerificationDialog'
 import UploadRequestCard from './components/UploadRequestCard'
 import ChatAttachmentCard from './components/ChatAttachment'
 import type { ScheduleTask, ScheduleIntent } from './components/TaskSchedule'
@@ -49,6 +50,10 @@ export default function AiWorkspace({ user, error, active, scheduleIntent }: Pro
   const [thinkingPreferences, setThinkingPreferences] = useState<ThinkingPreferences>(() => readThinkingPreferences(preferenceKey))
   const [failure, setFailure] = useState<{ question: string; message: string; uploadId?: string; files?: ChatAttachment[] } | null>(null)
   const busyRef = useRef(false)
+  const recoveryChecked = useRef(false)
+  const followEnabled = useRef(true)
+  const lastScrollTop = useRef(0)
+  const [connectionPaused, setConnectionPaused] = useState(false)
   const alive = useRef(true)
   const editor = useRef<HTMLTextAreaElement>(null)
   const scroll = useRef<HTMLDivElement>(null)
@@ -106,17 +111,35 @@ export default function AiWorkspace({ user, error, active, scheduleIntent }: Pro
     const current = request.current
     if (!busy || !current) return
     let cancelled = false
+    let failures = 0
     let timer: ReturnType<typeof setTimeout>
     async function poll() {
       try {
         const progress = await service<ChatProgress>('chat.progress', { request_id: current!.id })
-        if (!cancelled && request.current?.id === current!.id) setPendingProgress(progress)
-      } catch { /* Send may not have reached the server yet; the send request owns errors. */ }
+        if (!cancelled && request.current?.id === current!.id) { setPendingProgress(progress); setConnectionPaused(false); failures = 0 }
+      } catch { if (!cancelled && ++failures >= 2) setConnectionPaused(true) }
       if (!cancelled) timer = setTimeout(() => { void poll() }, 1000)
     }
     void poll()
     return () => { cancelled = true; clearTimeout(timer) }
   }, [busy])
+
+  useEffect(() => {
+    if (!active || recoveryChecked.current) return
+    let cancelled = false
+    let timer: ReturnType<typeof setTimeout>
+    async function restore() {
+      try {
+        const value = await service<{ jobs: { request_id: string; message: string }[] }>('chat.jobs')
+        if (cancelled) return
+        recoveryChecked.current = true
+        const job = value.jobs[0]
+        if (job && !busyRef.current && !editor.current?.value) void submitText(job.message || '恢复上一项任务', undefined, [], job.request_id)
+      } catch { if (!cancelled) timer = setTimeout(() => { void restore() }, 3000) }
+    }
+    void restore()
+    return () => { cancelled = true; clearTimeout(timer) }
+  }, [active])
 
   useEffect(() => {
     if (!active) return
@@ -133,16 +156,30 @@ export default function AiWorkspace({ user, error, active, scheduleIntent }: Pro
     element.style.height = Math.min(Math.max(element.scrollHeight, 28), 144) + 'px'
   }, [draft, hasMessages])
 
-  useEffect(() => {
-    if (scroll.current) scroll.current.scrollTo({ top: scroll.current.scrollHeight, behavior: 'smooth' })
+  useLayoutEffect(() => {
+    followEnabled.current = true
+    if (scroll.current) { scroll.current.scrollTop = scroll.current.scrollHeight; lastScrollTop.current = scroll.current.scrollTop }
   }, [conversation, pending, busy, failure])
 
   const followReply = useCallback(() => {
     const element = scroll.current
-    if (element && element.scrollHeight - element.clientHeight - element.scrollTop < 120) element.scrollTop = element.scrollHeight
+    if (element && followEnabled.current) { element.scrollTop = element.scrollHeight; lastScrollTop.current = element.scrollTop }
   }, [])
 
-  useEffect(() => { followReply() }, [pendingProgress, followReply])
+  useLayoutEffect(() => { followReply() }, [pendingProgress, followReply])
+  useEffect(() => {
+    const element = scroll.current, content = element?.firstElementChild
+    if (!element || !content) return
+    const observer = new ResizeObserver(followReply)
+    observer.observe(element); observer.observe(content)
+    return () => observer.disconnect()
+  }, [hasMessages, followReply])
+  function trackScroll(event: UIEvent<HTMLDivElement>) {
+    const element = event.currentTarget
+    if (element.scrollTop < lastScrollTop.current - 2) followEnabled.current = false
+    if (element.scrollHeight - element.clientHeight - element.scrollTop < 96) followEnabled.current = true
+    lastScrollTop.current = element.scrollTop
+  }
 
   async function loadHistory() {
     const value = await service<{ conversations: ConversationSummary[] }>('chat.list')
@@ -199,32 +236,34 @@ export default function AiWorkspace({ user, error, active, scheduleIntent }: Pro
     await submitText(draft.trim() || (attachments.length ? '请读取并分析这些附件。' : ''), undefined, attachments)
   }
 
-  async function submitText(text: string, uploadId?: string, files: ChatAttachment[] = []) {
+  async function submitText(text: string, uploadId?: string, files: ChatAttachment[] = [], resumeRequestId?: string) {
     if (!text.trim() || busyRef.current || uploadingRef.current) return
-    if (availability?.available === false) {
+    if (!resumeRequestId && availability?.available === false) {
       setNotice(user.permissions.includes('ai:configure') ? '请先在控制台添加并启用 AI 连接。' : 'AI 尚未配置，请联系管理员。')
       return
     }
     const original = text
-    const requestId = crypto.randomUUID()
+    const requestId = resumeRequestId || crypto.randomUUID()
     request.current = { id: requestId, stopping: false, startedAt: performance.now() }
     busyRef.current = true
     setRevealingMessageId(null); setPendingProgress(null); setBusy(true); setStopping(false); setNotice(''); setFailure(null); setPending(original.trim()); setPendingFiles(files); setAttachments([]); setDraft(''); setHistoryOpen(false)
     try {
-      const result = await service<{ conversation: Conversation; interrupted?: boolean }>('chat.send', {
-        interactive_questions: true, message: original.trim(), conversation_id: conversation?.id ?? null, request_id: requestId,
+      const result = await service<{ conversation: Conversation; interrupted?: boolean }>(resumeRequestId ? 'chat.resume' : 'chat.send', resumeRequestId ? { request_id: requestId } : {
+        interactive_questions: true, verification_inputs: true, message: original.trim(), conversation_id: conversation?.id ?? null, request_id: requestId,
         ...(uploadId ? { upload_id: uploadId } : {}),
         ...(files.length ? { file_ids: files.map(file => file.id) } : {}),
         ...(linkedTask ? { schedule_task_id: linkedTask.id } : {}),
         ...(availability?.thinking_controls ? { thinking: thinkingPreferences.thinking, reasoning_effort: thinkingPreferences.effort } : {}),
       })
       if (alive.current) { setLinkedTask(null); setRevealingMessageId(result.conversation.messages.filter(item => item.role === 'assistant').at(-1)?.id ?? null); setConversation(result.conversation); window.dispatchEvent(new Event('galaxy-usage-updated')); setNotice(result.interrupted ? '已打断' : ''); void loadHistory().catch(() => {}) }
+      if (alive.current) void service('chat.ack', { request_id: requestId }).catch(() => {})
     } catch (reason) {
       if (alive.current) setFailure({ question: original.trim(), message: (reason as Error).message, uploadId, files })
+      if (alive.current) void service('chat.ack', { request_id: requestId }).catch(() => {})
     } finally {
       busyRef.current = false
       if (request.current?.id === requestId) request.current = null
-      if (alive.current) { setBusy(false); setStopping(false); setPending(null); setPendingFiles([]); focusEditor() }
+      if (alive.current) { setBusy(false); setConnectionPaused(false); setStopping(false); setPending(null); setPendingFiles([]); focusEditor() }
     }
   }
 
@@ -248,7 +287,15 @@ export default function AiWorkspace({ user, error, active, scheduleIntent }: Pro
     event.currentTarget.form?.requestSubmit()
   }
 
-  const clarification = busy && !stopping ? pendingProgress?.interaction : null
+  const interaction = busy && !stopping ? pendingProgress?.interaction : null
+  const verification = interaction?.kind === 'verification' ? interaction : null
+  const clarification = interaction && interaction.kind !== 'verification' ? interaction : null
+  async function answerVerification(code?: string) {
+    const current = request.current
+    if (!current || !verification) throw new Error('当前验证已结束。')
+    await service('chat.verification', { request_id: current.id, challenge_id: verification.id,
+      ...(code ? { code } : { cancel: true }) })
+  }
   async function answerClarification(answers: { question_id: string; option_id?: string; text?: string }[]) {
     const current = request.current
     if (!current || !clarification) throw new Error('当前询问已结束。')
@@ -256,6 +303,7 @@ export default function AiWorkspace({ user, error, active, scheduleIntent }: Pro
   }
 
   const composer = <div className="composer-block">
+    {verification && <VerificationDialog key={verification.id} request={verification} onSubmit={code => answerVerification(code)} onCancel={() => answerVerification()} />}
     {linkedTask && <div className="schedule-linked" aria-label="关联任务"><CalendarClock size={17} /><div><strong>{linkedTask.name}</strong><span>修改触发时间 · 当前：{linkedTask.time_description}</span><code>{linkedTask.id}</code></div><button type="button" aria-label="取消关联任务" disabled={busy} onClick={() => setLinkedTask(null)}><X size={14} /></button></div>}
     {clarification ? <ClarificationPanel key={clarification.id} request={clarification} stopping={stopping} onSubmit={answerClarification} onCancel={() => { void stopReply() }} /> : <form className={'chat-composer' + (busy ? ' is-busy' : '')} onSubmit={send} aria-busy={busy}>
       {!!attachments.length && <div className="composer-attachments" aria-label="待发送附件">{attachments.map(file => <ChatAttachmentCard key={file.id} file={file} disabled={busy || uploading} onRemove={() => setAttachments(previous => previous.filter(item => item.id !== file.id))} />)}</div>}
@@ -350,7 +398,7 @@ export default function AiWorkspace({ user, error, active, scheduleIntent }: Pro
         <p>从一个问题，开始今天的灵感。</p>
       </div>}
     </div></div><div className="conversation-composer">{composer}</div></div> : <div className="conversation-layout">
-      <div className="message-scroll" ref={scroll}><div className="message-list" role="log" aria-label="聊天消息" aria-live="polite">
+      <div className="message-scroll" ref={scroll} onScroll={trackScroll}><div className="message-list" role="log" aria-label="聊天消息" aria-live="polite">
         {conversation?.messages.map(messageRow)}
         {failure && <>
           {messageRow({ id: 'failed-user', role: 'user', content: failure.question, created_at: 0, attached_files: failure.files })}
@@ -367,7 +415,7 @@ export default function AiWorkspace({ user, error, active, scheduleIntent }: Pro
                 <summary><BrainCircuit size={13} strokeWidth={1.6} /><span>{thinkingPreferences.thinking ? '思考过程' : '执行过程'}</span><ChevronDown className="reasoning-chevron" size={12} /></summary>
                 <div className="message-process-content">
                   {pendingProgress?.reasoning_content && <div className="reasoning-text">{pendingProgress.reasoning_content}</div>}
-                  <div role="status">{stopping ? '正在停止回复' : pendingProgress?.phase === 'waiting' ? '等待你的选择' : pendingProgress?.phase === 'tool' ? `正在执行${pendingProgress.tool_name ? '：' + pendingProgress.tool_name : '工具'}` : pendingProgress?.phase === 'summarizing' ? '正在整理上下文' : pendingProgress?.phase === 'model' ? '正在思考' : pendingProgress?.phase === 'finishing' ? '正在整理回答' : '正在准备'}</div>
+                  <div role="status">{connectionPaused ? '连接暂时中断，任务仍在服务器运行，正在重连…' : stopping ? '正在停止回复' : pendingProgress?.phase === 'waiting' ? verification ? '等待验证码' : '等待你的选择' : pendingProgress?.phase === 'tool' ? `正在执行${pendingProgress.tool_name ? '：' + pendingProgress.tool_name : '工具'}` : pendingProgress?.phase === 'summarizing' ? '正在整理上下文' : pendingProgress?.phase === 'model' ? '正在思考' : pendingProgress?.phase === 'finishing' ? '正在整理回答' : '正在准备'}</div>
                 </div>
               </details>}
               <PendingReply active={active} stopping={stopping} />

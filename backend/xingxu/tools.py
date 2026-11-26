@@ -26,6 +26,7 @@ from galaxy_cli.feishu_capabilities import DOMAINS as FEISHU_DOMAINS
 from .store import JsonRepository
 from galaxy_cli.registry import ToolError
 from galaxy_cli.tools.excel.create import normalize as normalize_excel, OUTPUT as EXCEL_OUTPUT
+from galaxy_cli.tools.youzan.order_export import normalize as normalize_order_export
 from galaxy_cli.excel.schema import normalize as normalize_excel_file, INSPECT_OUTPUT, TRANSFORM_OUTPUT
 from jsonschema import Draft202012Validator
 from galaxy_cli.tools.file.publish import normalize as normalize_file, OUTPUT as FILE_OUTPUT
@@ -45,6 +46,8 @@ GALAXY_PERMISSION = "tools:galaxy_cli"
 COMMAND_PERMISSIONS = {"help": "galaxy:help", "youzan.customer-search": "youzan:customer:read", "youzan.customer-get": "youzan:customer:read", "youzan.business-report": "youzan:report:read", "excel.create": "excel:export", "file.publish": "file:publish"}
 COMMAND_PERMISSIONS.update({'youzan.'+name: 'youzan:material:read' if name.startswith('material-') else 'youzan:product:read' for name in CATALOG_NAMES})
 COMMAND_PERMISSIONS['youzan.order-search'] = 'youzan:order:read'
+COMMAND_PERMISSIONS['youzan.order-export'] = 'youzan:order:read'
+COMMAND_PERMISSIONS.update({'interaction.verification':'ai:chat','interaction.verification-submit':'ai:chat'})
 COMMAND_PERMISSIONS['youzan.customer-count'] = 'youzan:customer:read'
 COMMAND_PERMISSIONS['interaction.ask'] = 'ai:chat'
 COMMAND_PERMISSIONS['time.now'] = 'workspace:read'
@@ -143,6 +146,23 @@ def help_arguments(raw):
         args = ['help', '--category', args[0], *args[2:]]
     if args[0] == 'interaction.ask':
         args = ['interaction', 'ask', *args[1:]]
+    if args[0] in ('youzan.order-export','interaction.verification','interaction.verification-submit'):
+        args=[*args[0].split('.',1),*args[1:]]
+    if args[:2] in (['youzan','order-export'],['interaction','verification'],['interaction','verification-submit']):
+        if len(args) not in (4,6) or args[2]!='--input' or len(args)==6 and args[4:]!=['--format','json']:
+            raise DispatchDenied('invalid_arguments','请使用已注册工具名 --input JSON。')
+        try:
+            body=strict_json(args[3])
+            if args[0]=='youzan':body=normalize_order_export(body)
+            else:
+                from galaxy_cli.tools.interaction.verification import INPUT as WAIT_INPUT
+                from galaxy_cli.tools.interaction.verification_submit import INPUT as SUBMIT_INPUT
+                schema=WAIT_INPUT if args[1]=='verification' else SUBMIT_INPUT
+                if not Draft202012Validator(schema).is_valid(body):raise ValueError()
+                uuid.UUID(body['challenge_id'])
+        except (ValueError,TypeError,KeyError,ToolError):
+            raise DispatchDenied('invalid_arguments','导出时间或验证码引用参数无效，不能传验证码原值。') from None
+        return [*args[:2],'--input',json.dumps(body,ensure_ascii=False),'--format','json']
     if args[0] == 'interaction':
         if len(args) not in (4, 6) or args[:3] != ['interaction', 'ask', '--input'] or len(args) == 6 and args[4:] != ['--format', 'json']:
             raise DispatchDenied('invalid_arguments', '请使用 interaction ask --input JSON。')
@@ -271,6 +291,9 @@ class GalaxyDispatcher:
         self.schedule_provider = None
         self.clawbot_provider = None
         self.account_provider = None
+        self.order_export_provider = None
+        from .verification import Verifications
+        self.verifications = Verifications()
         self.shop_choices = None
         self.shop_resolver = None
         self.operation_guard = None
@@ -511,7 +534,7 @@ class GalaxyDispatcher:
                 event['command'] += ' ' + canonical[2]
             elif command.startswith('feishu.') and canonical[1] in FEISHU_DOMAINS:
                 event['command'] += ' ' + strict_json(canonical[canonical.index('--input')+1]).get('action','help')
-            async with (nullcontext() if command == 'interaction.ask' else self.slots):
+            async with (nullcontext() if command.startswith('interaction.') else self.slots):
                 # Recheck after waiting for a slot, including the command-specific grant.
                 user = self._principal(context)
                 if not command_allowed(command,canonical,user['permissions']):
@@ -530,6 +553,34 @@ class GalaxyDispatcher:
                     except AuthFailure as error:
                         raise DispatchDenied(error.code, error.message) from None
                     self._check_command(context, command, canonical)
+                elif command == 'interaction.verification':
+                    if interaction is None or context.background_run or not context.verification_inputs:
+                        raise DispatchDenied('chat_context_required','请在支持验证码弹窗的桌面聊天中继续。')
+                    body=strict_json(canonical[3])
+                    try:
+                        entry=self.verifications.get(context,body['challenge_id'])
+                        result=await interaction({'kind':'verification','entry':entry})
+                        self._check_command(context,command,canonical)
+                    except AuthFailure as error:raise DispatchDenied(error.code,error.message) from None
+                elif command == 'interaction.verification-submit':
+                    body=strict_json(canonical[3])
+                    try:
+                        result=await self.verifications.submit(context,body['challenge_id'],body['submission_id'],
+                            lambda:self._check_command(context,command,canonical))
+                    except AuthFailure as error:raise DispatchDenied(error.code,error.message) from None
+                elif command == 'youzan.order-export':
+                    if self.order_export_provider is None:raise DispatchDenied('tool_unavailable','订单导出服务尚未接入。')
+                    if scope=='all' or isinstance(scope,list) and len(scope)!=1:
+                        raise DispatchDenied('shop_scope_denied','一次导出只针对明确的一家店铺。')
+                    try:
+                        check=lambda:self._check_command(context,command,canonical)
+                        selection=scope or 'current'
+                        async with self.operation_guard(user) if self.operation_guard else nullcontext():
+                            shops=await self.shop_resolver(user,selection,prepare=False,force=False,validate=check)
+                            if len(shops)!=1 or 'error' in shops[0]:raise AuthFailure('shop_access_required','当前店铺会话不可用。',409)
+                            result=await self.order_export_provider.run(user,context,strict_json(canonical[3]),shops[0]['credentials'],
+                                check,interactive=interaction is not None and not context.background_run and context.verification_inputs)
+                    except AuthFailure as error:raise DispatchDenied(error.code,error.message) from None
                 elif command == 'account.me':
                     if not self.account_provider:raise DispatchDenied('account_unavailable', '账号信息服务尚未启用。')
                     result = self.account_provider.summary(user)

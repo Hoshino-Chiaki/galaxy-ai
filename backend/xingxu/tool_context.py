@@ -12,6 +12,7 @@ class ExecutionContext:
     conversation_id: str
     session_token: str = field(repr=False)
     background_run: bool = False
+    verification_inputs: bool = False
 
 
 class DispatchDenied(Exception):

@@ -14,7 +14,7 @@ from .registry import ToolError
 
 QUOTA = 512 * 1024 * 1024
 TTL = 7 * 24 * 60 * 60
-ENTRY = re.compile(r'[0-9a-f]{32}\.(jsonl|json|bin|meta\.json|tmp)')
+ENTRY = re.compile(r'[0-9a-f]{32}\.(jsonl|json|csv|bin|meta\.json|tmp)')
 
 
 def prune(directory, now):
@@ -50,7 +50,7 @@ class CachedDataset:
                            for k in ('user_id', 'workspace_id'))):
             raise ToolError('invalid_context', '批量数据需使用服务端提供的本人缓存目录。', 1)
         self.context, self.parts, self.query = context, relative_parts(category), query
-        if format not in ('jsonl', 'json', 'binary'):
+        if format not in ('jsonl', 'json', 'csv', 'binary'):
             raise ValueError('Unsupported cache format')
         self.format, self.cancel = format, cancel
         self.quota = quota

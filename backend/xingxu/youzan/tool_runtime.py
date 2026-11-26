@@ -20,7 +20,7 @@ def catalog_body(arguments):
 def readonly_youzan(arguments):
     name = arguments[1]
     if name == 'product-group': return arguments[2] in ('list', 'get', 'stores')
-    if name in ('customer-search', 'customer-get', 'customer-count', 'business-report', 'material-list', 'product-get', 'product-options', 'product-search', 'order-search'):
+    if name in ('customer-search', 'customer-get', 'customer-count', 'business-report', 'material-list', 'product-get', 'product-options', 'product-search', 'order-search', 'order-export'):
         return True
     return name == 'material-category' and arguments[2] == 'list' or name == 'product-update' and arguments[2] == 'preview'
 

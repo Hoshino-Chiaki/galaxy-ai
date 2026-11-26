@@ -8,6 +8,7 @@ const { baseUrl } = require('./backend.json')
 const authority = new URL(baseUrl)
 const uploads = require('./upload.cjs')
 const storageTransfers = require('./storage-transfer.cjs')
+const chatJobs = require('./chat-jobs.cjs')
 if (authority.protocol !== 'https:') throw new Error('Authentication requires HTTPS')
 const certificate = readFileSync(path.join(__dirname, 'certs/server.crt'))
 const agent = createAgent()
@@ -60,7 +61,7 @@ function requestOnce(method, route, body, bearer, timeout = 15000, binary = fals
         }
         let value
         try { value = JSON.parse(Buffer.concat(chunks).toString('utf8')) }
-        catch { reject(new Error('登录服务返回异常。')); return }
+        catch { const error = new Error('服务器返回格式异常。'); error.status = res.statusCode; reject(error); return }
         if (res.statusCode < 200 || res.statusCode >= 300) {
           const error = new Error(value.error?.message || '登录请求失败。')
           error.status = res.statusCode
@@ -104,9 +105,9 @@ async function request(method, route, body, bearer, timeout = 15000, binary = fa
       // An isolated retry must not destroy sockets used by chat.send or uploads.
       await new Promise(resolve => setTimeout(resolve, 250))
       try { return await requestOnce(method, route, body, bearer, timeout, binary, true) }
-      catch (retryError) { throw publicNetworkError(retryError) }
+      catch (retryError) { const exposed = publicNetworkError(retryError); exposed.retryable = retryableNetwork(retryError); throw exposed }
     }
-    throw publicNetworkError(error)
+    const exposed = publicNetworkError(error); exposed.retryable = retryableNetwork(error); throw exposed
   }
 }
 
@@ -249,8 +250,12 @@ const routes = {
   'chat.delete': value => ['DELETE', `/api/v1/chat/conversations/${identifier(value.id)}`],
   'chat.send': value => ['POST', '/api/v1/chat/send', value],
   'chat.answer': value => ['POST', '/api/v1/chat/answer', value],
+  'chat.verification': value => ['POST', '/api/v1/chat/verification', value],
   'chat.cancel': value => ['POST', '/api/v1/chat/cancel', value],
   'chat.progress': value => ['GET', `/api/v1/chat/runs/${identifier(value.request_id)}`],
+  'chat.jobs': () => ['GET', '/api/v1/chat/jobs'],
+  'chat.ack': value => ['POST', `/api/v1/chat/jobs/${identifier(value.request_id)}/ack`, {}],
+  'chat.resume': value => ['GET', `/api/v1/chat/runs/${identifier(value.request_id)}`],
   'upload.status': value => ['GET', `/api/v1/uploads/${identifier(value.id)}`],
   'storage.list': () => ['GET', '/api/v1/storage'],
   'prompt.get': () => ['GET', '/api/v1/personal-prompt'],
@@ -315,6 +320,14 @@ async function api(action, value, notify = () => {}) {
       if (content.length !== metadata.size) throw new Error('文件下载不完整，请重试。')
       await fs.writeFile(selected.filePath, content)
       return { ok: true, data: { saved: true, filename } }
+    }
+    if (action === 'chat.send' || action === 'chat.resume') {
+      const options = { isCurrent: () => token === captured,
+        request: (method, route, body, timeout) => request(method, route, body, captured, timeout) }
+      const data = action === 'chat.send' ? await chatJobs.submitJob(options, value)
+        : await chatJobs.followJob(options, identifier(value.request_id))
+      if (token !== captured) throw new Error('账号已切换，请重新操作。')
+      return { ok: true, data }
     }
     const [method, route, body] = routes[action](value)
     const data = await request(method, route, body, captured, action === 'chat.send' ? 0 : action === 'guanjia.databases' ? 40000 : action === 'guanjia.login' ? 120000 : action === 'jushuitan.login' ? 100000 : action === 'jushuitan.captcha' ? 35000 : action === 'admin.testProvider' ? 140000 : 15000)
