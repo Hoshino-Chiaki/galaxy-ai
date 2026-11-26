@@ -580,6 +580,13 @@ class GalaxyDispatcher:
                             if len(shops)!=1 or 'error' in shops[0]:raise AuthFailure('shop_access_required','当前店铺会话不可用。',409)
                             result=await self.order_export_provider.run(user,context,strict_json(canonical[3]),shops[0]['credentials'],
                                 check,interactive=interaction is not None and not context.background_run and context.verification_inputs)
+                        if result.get('status')=='verification_required':
+                            # Open immediately after SMS success, without another model turn.
+                            # The shop/session guard above is released during human input.
+                            entry=self.verifications.get(context,result['challenge_id'])
+                            answer=await interaction({'kind':'verification','entry':entry})
+                            check()
+                            result={**answer,'job_id':result['job_id'],'template':result['template']}
                     except AuthFailure as error:raise DispatchDenied(error.code,error.message) from None
                 elif command == 'account.me':
                     if not self.account_provider:raise DispatchDenied('account_unavailable', '账号信息服务尚未启用。')

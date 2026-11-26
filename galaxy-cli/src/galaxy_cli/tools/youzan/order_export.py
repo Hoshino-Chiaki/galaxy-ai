@@ -19,7 +19,7 @@ def normalize(value):
 DESCRIPTION=('按北京时间下单时间批量导出订单CSV，固定使用当前店铺名为“AI财务订单表1”的商品维度模板，不使用系统标准模板；youzan order-export --input JSON。'
  '创建必填 start_time/end_time（YYYY-MM-DD HH:mm:ss），可选 action=create；店铺用 galaxy_cli 的 shops 指定明确一家，不支持 all 或多家同时导出。'
  '服务端解析各店独立模板ID并核验6列：订单号、商品名称、订单商品状态、订单状态、付款方式、订单类型。程序创建导出、查询进度并下载，模型不用逐页查询订单。'
- '遇短信验证会先自动发送短信，返回 status=verification_required、challenge_id、job_id；立即调用 interaction.verification 打开客户端输入框并等待，不能仅回复让用户发验证码。'
+ '遇短信验证先自动发送短信，发送成功立即弹出客户端输入框并等待，期间不需要模型另发一轮请求。返回 received 含 challenge_id、submission_id、job_id；取消或超时分别返回 cancelled/expired。若渠道返回 verification_required，再调用通用 interaction.verification 等待，不要仅回复让用户发验证码。'
  '收到 submission_id 后调用通用 interaction.verification-submit，服务器验证并继续下载。等待最多120秒，超时/取消应停止。'
  '需要官方安全验证时明确提示人工完成，不重复发送；不更改登录配置、不代替用户完成滑块。'
  '已有导出任务用 action=resume 和真实 job_id 续接，不重复创建。成功返回 status=downloaded、本人缓存 sandbox_path/path、format=csv、rows、headers、时间范围和模板；完整数据不进入对话。'

@@ -96,3 +96,35 @@ def test_desktop_api_accepts_only_owner_and_never_exposes_code(setup):
             if not wait.done():wait.cancel()
             runs.finish(run)
     asyncio.run(scenario())
+
+
+def test_export_opens_verification_without_an_extra_model_turn(setup):
+    import uuid
+    from contextlib import asynccontextmanager
+    app,_,employee,_=setup
+    async def scenario():
+        actor=employee['user'];dispatcher=app.state.ai.dispatcher
+        ctx=ExecutionContext(actor['id'],actor['workspace_id'],tuple(actor['permissions']),'auto-dialog',employee['access_token'],verification_inputs=True)
+        guarded=False
+        @asynccontextmanager
+        async def guard(user):
+            nonlocal guarded
+            guarded=True
+            try:yield
+            finally:guarded=False
+        async def shops(*args,**kwargs):return [{'credentials':{'kdt_id':'94598170'}}]
+        async def submit(code,check):return {'status':'downloaded'}
+        async def export(*args,**kwargs):
+            assert guarded and kwargs['interactive']
+            return {**dispatcher.verifications.issue(ctx,channel='youzan',purpose='导出',destination='masked',submitter=submit),'job_id':'fixture','template':'AI财务订单表1'}
+        async def interaction(body):
+            assert not guarded and body['kind']=='verification'
+            return {'status':'received','challenge_id':body['entry'].id,'submission_id':'one-time-reference','next_tool':'interaction.verification-submit'}
+        dispatcher.operation_guard=guard;dispatcher.shop_resolver=shops
+        dispatcher.order_export_provider=SimpleNamespace(run=export)
+        body={'start_time':'2026-11-16 00:00:00','end_time':'2026-11-22 23:59:59'}
+        call={'id':'auto-dialog','type':'function','function':{'name':'galaxy_cli','arguments':json.dumps({'shops':['94598170'],'args':['youzan','order-export','--input',json.dumps(body)]})}}
+        event=await dispatcher.execute(ctx,call,interaction=interaction)
+        assert event['status']=='success' and event['result']['status']=='received'
+        assert event['result']['submission_id']=='one-time-reference'
+    asyncio.run(scenario())
